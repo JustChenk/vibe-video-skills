@@ -401,18 +401,22 @@ def set_save_permission(page, allow: bool = True):
 
 
 def set_declaration(page, text: str):
-    """自主声明；text 为空表示不改；「无需添加自主声明」会显式选中。"""
+    """自主声明：单次滚到底 + 可见性等待，去掉固定 sleep 与 4 次平滑滚动。"""
     if not text:
         return True
     if text not in config.DECLARATIONS:
         raise ValueError(f"declaration 只能是 {config.DECLARATIONS}，实际: {text}")
+    t0 = time.perf_counter()
+
+    def mark(step):
+        print(f"    [decl {time.perf_counter() - t0:.2f}s] {step}", flush=True)
+
     _dismiss_guide(page)
-    for _ in range(4):
-        try:
-            page.mouse.wheel(0, 2500)
-            page.wait_for_timeout(400)
-        except Exception:
-            break
+    mark("guide dismissed")
+
+    # 一次滚到底：替代 4× mouse.wheel（每次 wheel 都会触发平滑滚动动画）
+    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    mark("scrolled")
 
     # 已经是目标声明则跳过
     try:
@@ -428,9 +432,10 @@ def set_declaration(page, text: str):
         entry = page.get_by_text("自主声明").first
     if entry.count() == 0:
         raise RuntimeError("找不到「自主声明」入口")
-    entry.scroll_into_view_if_needed(timeout=3000)
+    entry.wait_for(state="visible", timeout=8000)
+    mark("entry visible")
     entry.click()
-    time.sleep(1)
+    mark("entry clicked")
 
     opt = page.locator(f"label:text-is('{text}')").last
     if opt.count() == 0:
@@ -438,18 +443,28 @@ def set_declaration(page, text: str):
     if opt.count() == 0:
         page.keyboard.press("Escape")
         raise RuntimeError(f"声明面板里没有选项: {text}")
+    opt.wait_for(state="visible", timeout=5000)
+    mark("option visible")
+    # 单选项在弹层动画里，Playwright 的 actionability 等待会卡 15s；
+    # 直接派发 DOM click（React 受控组件同样会收到）。
     try:
-        opt.click()
-    except Exception:
         opt.evaluate("el => el.click()")
-    time.sleep(0.4)
+    except Exception:
+        opt.click(force=True, timeout=2000)
+    mark("option clicked")
 
     ok = page.get_by_role("button", name="确定").last
     if ok.count() == 0:
         ok = page.locator('button:has-text("确定")').last
-    if ok.count() > 0 and ok.is_visible():
+    if ok.count() > 0:
+        ok.wait_for(state="visible", timeout=3000)
         ok.click()
-    time.sleep(0.8)
+    mark("confirmed")
+    try:
+        page.locator("[role='dialog'], .semi-modal").last.wait_for(state="hidden", timeout=2000)
+    except Exception:
+        pass
+    mark("done")
     print(f"  自主声明: {text}")
     return True
 
