@@ -1,13 +1,13 @@
 ---
 name: douyin-publisher
 description: "抖音成品视频批量发布：把一个系列的成片 mp4 批量上传到抖音创作者平台并逐集填标题话题/定时发布。引导 Agent 用 douyin-publisher CLI（login 扫码 / gen 生成清单 / publish 批量发布，dry-run 默认）完成发布全流程，包括：从分镜脚本提取每集标题话题填清单、首跑校准页面选择器、非交互批处理模式、失败集补跑、风控纪律与合集处理建议。触发词：发布抖音、批量上传、上传抖音、发布视频到抖音、抖音发布清单、douyin publisher、发抖音、系列视频发布"
-version: "1.1.0"
+version: "1.2.0"
 
 author: "CodeBuddy AI"
 
 created: "2026-10-16"
 
-changelog: "1.0.0 首个版本。源自 douyin-publisher 项目（D:/github/douyin-publisher，独立开源仓库）实战立项：调研确认抖音开放平台 OpenAPI 对个人主体不可行（个人仅限小玩法；2025-08 公告 348 要求企业注册资本≥50万+注册满1年），故走创作者中心网页端 + Playwright 浏览器自动化路线。为配合 Agent 批处理，工具已加 --non-interactive 模式。1.1.0（2026-10-18）对齐工具 v0.3 实战（Ep07 首跑 + Ep08-10 定时发布）：登录改持久化 Chrome 档案（storage_state 被抖音判新设备 20 分钟失效，已弃用）；封面已自动化（cover 竖版阻断/cover_h 横版仅警告）；manifest 新增 collection/aigc；新增 --at/--now 统一定时；发布按钮须 button:text-is 精确匹配；坑表补定时规则与 keepalive。"
+changelog: "1.0.0 首个版本。源自 douyin-publisher 项目实战立项：调研确认抖音开放平台 OpenAPI 对个人主体不可行，故走创作者中心网页端 + Playwright 浏览器自动化路线。1.1.0（2026-10-18）对齐工具 v0.3 实战（Ep07 首跑 + Ep08-10 定时发布）：登录改持久化 Chrome 档案；封面自动化；manifest 新增 collection/aigc；--at/--now 统一定时；发布按钮精确匹配；keepalive。1.2.0（2026-10-18）Agent-first：工具并入本 skill 的 engine/ 统一管理；新增 doctor 自检、publish --json（stdout 纯 JSON + 错误码）、默认非交互（--interactive 才逐集确认）；manifest 新增 visibility/declaration/allow_save；合集与非公开可见互斥。"
 ---
 
 # 抖音成品视频批量发布（douyin-publisher）
@@ -16,18 +16,20 @@ changelog: "1.0.0 首个版本。源自 douyin-publisher 项目（D:/github/douy
 
 ## 概述
 
-- **工具本体**：`D:\github\douyin-publisher`（独立 git 仓库，开源项目）。**定位是 Agent-first 管线，不做 GUI**（2026-10-18 定位决策）：工具本质是浏览器自动化，"界面"就是发布页本身；人的参与收敛为扫码一次、审清单、批批次三个触点。
-- **本 skill**：Agent 视角的调用手册。工具改版改仓库，工作流经验沉淀在这里。
-- **原理**：Playwright 驱动本机 Chrome（launch_persistent_context 持久化档案）操作 creator.douyin.com 发布页。**官方 OpenAPI 对个人主体不可行**（详见工具仓库 docs/openapi-research.md），别再往 API 路线上浪费时间。
+- **工具本体**：本 skill 目录下的 `engine/`（douyin-publisher v0.5，独立 Python 包）。**Agent-first 管线，不做 GUI**：工具本质是浏览器自动化，"界面"就是发布页本身；人的参与收敛为扫码一次、审清单、批准批次三个触点。
+- **本 skill**：Agent 视角的调用手册。引擎改 `engine/`，工作流经验沉淀在这里。
+- **原理**：Playwright 驱动本机 Chrome（launch_persistent_context 持久化档案）操作 creator.douyin.com 发布页。**官方 OpenAPI 对个人主体不可行**（详见 `engine/docs/openapi-research.md`），别再往 API 路线上浪费时间。
 
 ## 前置条件（每次会话先检查）
 
-1. **CLI 可用**：`douyin-publisher --version`。不可用则
-   `"C:/Users/yangck/.workbuddy/binaries/python/envs/default/Scripts/pip.exe" install -e D:/github/douyin-publisher`。
+1. **CLI 可用**：`douyin-publisher --version`（应为 0.5.x）。不可用则
+   `"C:/Users/yangck/.workbuddy/binaries/python/envs/default/Scripts/pip.exe" install -e "<本skill目录>/engine"`。
+   未安装也可用 `python -m douyin_publisher`（在 `engine/` 目录下）。
 2. **登录档案存在**：`~/.douyin_publisher/chrome-profile/`（持久化 Chrome 档案）。不存在 → 提醒用户在场，跑
    `douyin-publisher login` 后**用户用手机扫码**（Agent 无法代扫，这一步必须等用户）。
    ⚠️ 已弃用 storage_state 方案：cookie 在新临时 profile 恢复会被抖音判"新设备"踢下线（实测 20 分钟内失效），持久档案扫一次长期复用。
-3. **登录态失效**（publish 时报跳转登录页）→ 重跑 `login`。
+3. **每次会话先自检**：`douyin-publisher doctor --json`；要确认登录态加 `--deep`（会打开浏览器约 10 秒）。
+   `login` 为 `false` 或报跳转登录页 → 重跑 `login`。
 
 ## 工作流
 
@@ -45,7 +47,10 @@ douyin-publisher gen "<系列目录>" -o <系列目录>/发布清单.json
 生成后**Agent 主动填 text 与各字段**（这是 Agent 比 CLI 强的地方，也是用户最省事的环节）：
 - `text` 格式：第一行=作品标题，中间=正文若干行，末尾=话题。标题来源优先级：该集 `分镜脚本-Opus5.5版.md` 的钩子文案 / `变更记录.md` 的集名与一句话主旨 / 集目录名。
 - `cover`（竖版 3:4，设置失败会**中止发布**）与 `cover_h`（横版 4:3，失败仅警告不阻断）：直接填每集交付的封面路径。
-- `collection`：合集名按「包含」匹配，须为**已存在**的合集（找不到会打印候选）；`aigc: true` 勾「内容由 AI 生成」（AI 生成内容按平台要求应声明）。
+- `collection`：合集名按「包含」匹配，须为**已存在**的合集（找不到会打印候选）。
+- `visibility`（公开/好友可见/仅自己可见）、`declaration`（6 种自主声明，含「无需添加自主声明」）、
+  `allow_save`（true/false）：用户自行抉择的发布设置，不填则用平台默认（公开/允许/无声明）。
+  **平台硬限制：进合集的视频不能设好友/仅自己可见**，同时给两者会直接报错，二选一。
 - `publish_at` 留空=立即；或批量跑时用 `--at 'YYYY-MM-DD HH:MM'` / `--now` 统一覆盖清单。
 - 填完把完整清单展示给用户过目一遍再进第 3 步。
 
@@ -64,16 +69,18 @@ douyin-publisher publish <清单> --only 1 --non-interactive
 ### 第 4 步：批量发布（必须用户批准）
 
 ```bash
-# 推荐：逐集人工确认（用户在场时）
+# 默认非交互，适合 Agent 批处理；要逐集人工确认加 --interactive
 douyin-publisher publish <清单> --execute
-# Agent 批处理（用户明确批准本批次后）：
-douyin-publisher publish <清单> --execute --non-interactive
+# 机器可读结果：stdout 只输出 JSON，过程日志走 stderr
+douyin-publisher publish <清单> --execute --json --result-file logs/result.json
 ```
 
 **纪律（不可违反）**：
-- `--execute --non-interactive` 视同逐集免确认自动发布，**必须先拿到用户对这批内容的明确批准**（展示过清单 + 用户点头）， Agent 不得自行决定真发。
+- `--execute` **必须先拿到用户对这批内容的明确批准**（展示过清单 + 用户点头），Agent 不得自行决定真发。
 - 默认集间隔 120s 基准（实际 0.8~1.5 倍随机），单批 ≤10 集；想更快用 `--interval 60` 但别更低。
 - 只用真实浏览器（工具已固化 headless=False），别为省资源改 headless——风控概率大增。
+- `--json` 结果里的 `error_code` 用于决策：`auth_expired` 先扫码；`selector_drift` 去校准；
+  `platform_rejected` 看平台限制；`upload_timeout` 可 `--only` 补跑。
 
 ### 第 5 步：验收与收尾
 
@@ -86,7 +93,7 @@ douyin-publisher publish <清单> --execute --non-interactive
 | 坑 | 处理 |
 |---|---|
 | OpenAPI 路线幻想 | 个人主体建不了网站/移动应用，别再试；有企业资质需求看工具仓库 docs/openapi-research.md |
-| Agent 跑 publish 卡住不动 | 用了交互模式，`input()` 在等回车——批处理必须 `--non-interactive` |
+| Agent 跑 publish 卡住不动 | 默认已是非交互；只在你显式加了 `--interactive` 时才会 `input()` 等回车 |
 | 选择器突然全失效 | 抖音改版了，回第 3 步校准，改 config.py 后 commit |
 | 带水印/logo 的片源 | 大概率降权/下架，发布前提醒用户 |
 | 发布按钮点错位置 | 必须精确匹配 `button:text-is('发布')`；宽匹配会命中左侧导航「作品发布」，表现为「暂存」假成功 |
@@ -95,6 +102,10 @@ douyin-publisher publish <清单> --execute --non-interactive
 | 批量中途 Chrome 退出 | 持久化 context 里关掉最后一个页面会杀 Chrome——工具已内置空白页 keepalive，别删 |
 | 用户语音输入 | "发布清单"可能被识别成别的词，涉及发布操作一律先复述清单内容再执行 |
 
-## 配对模式（本 skill 确立的惯例）
+## 形态（2026-10-18 定稿：engine + skill 单轨）
 
-**项目给人用（CLI + README + License），skill 给 Agent 用（触发词 + 工作流 + 坑表）**——同一工具两份沉淀，当前内容差异不大，分开是习惯性占位，意义在后期开发侧重点分化：skill 线为 Agent 越磨越深，项目线为人演化形态。**但形态按工具性质定，不默认加 GUI**：浏览器自动化类工具的界面就是被驱动的网页本身，Agent-first 是它的终态（2026-10-18 定位决策）。今后新工具立项默认按此双轨沉淀：项目独立建仓库，skill 进 vibe-video-skills 合集并 junction 进 `.workbuddy/skills/`。
+**引擎 + 说明书，两层，不再做“给人用的应用”**：
+- `engine/` = 确定性执行器（Python + Playwright），只暴露 CLI 契约：manifest 进、JSON 出、退出码。
+- `SKILL.md` = Agent 的工作流与决策手册（触发词、范围确认、dry-run 判断、失败归因、批次批准、验收）。
+- 人只通过对话参与三个触点：**扫码一次 / 审清单 / 批准批次**。不做 GUI——浏览器自动化类工具的界面就是被驱动的网页本身。
+- 今后同类工具默认按此单轨沉淀：引擎作为 skill 的 `engine/` 子目录，与 skill 一起版本管理，junction 进 `.workbuddy/skills/`。

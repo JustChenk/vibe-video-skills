@@ -1,0 +1,16 @@
+# 运行产物（绝不入库）
+logs/
+auth/
+*.json.bak
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+
+# 本地试跑清单
+清单.json
+manifest.local.json

@@ -1,0 +1,223 @@
+# -*- coding: utf-8 -*-
+"""统一命令行入口（Agent-first，无 GUI）。
+
+  douyin-publisher login   [--profile DIR]
+  douyin-publisher gen     <系列目录> [-o 清单.json] [--prefer 关键字]
+  douyin-publisher doctor  [--deep] [--json]
+  douyin-publisher publish <清单.json> [--execute] [--at 时间] [--json]
+"""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from . import __version__, auth, config, manifest, uploader
+
+
+def _profile_path(args) -> Path:
+    return Path(getattr(args, "profile", None) or config.PROFILE_DIR).expanduser()
+
+
+def _write_json(path, data):
+    Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def cmd_login(args):
+    auth.login(_profile_path(args))
+
+
+def cmd_gen(args):
+    series_dir = Path(args.series_dir).resolve()
+    if not series_dir.is_dir():
+        manifest.fail(f"目录不存在: {series_dir}")
+    data = manifest.gen_manifest(series_dir, args.prefer)
+    if not data["items"]:
+        manifest.fail(f"在 {series_dir} 下没找到 mp4")
+    out = Path(args.output) if args.output else series_dir / "发布清单.json"
+    out.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"已生成 {out}，共 {len(data['items'])} 集，请逐条补齐 text 后再 publish")
+
+
+def cmd_doctor(args):
+    profile = _profile_path(args)
+    checks = []
+
+    def add(name, ok, detail=""):
+        checks.append({"name": name, "ok": ok, "detail": str(detail)})
+
+    add("version", True, __version__)
+    profile_ok = profile.is_dir() and any(profile.iterdir())
+    add("profile", profile_ok, profile)
+    chrome_candidates = [
+        Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+        Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+        Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+    ]
+    found = next((p for p in chrome_candidates if p.exists()), None)
+    add("browser", bool(found), found or "未找到 Chrome/Edge")
+    if args.deep and profile_ok:
+        try:
+            ok, url = auth.check_login(profile)
+            add("login", ok, url)
+        except Exception as e:
+            add("login", False, f"{type(e).__name__}: {e}")
+    else:
+        add("login", None, "未检查（加 --deep 打开浏览器验证）")
+
+    ok = all(c["ok"] for c in checks if c["ok"] is not None)
+    if args.json:
+        print(json.dumps({"ok": ok, "checks": checks}, ensure_ascii=False, indent=2))
+    else:
+        for c in checks:
+            flag = "OK" if c["ok"] else ("--" if c["ok"] is None else "!!")
+            print(f"[{flag}] {c['name']}: {c['detail']}")
+    sys.exit(0 if ok else 1)
+
+
+def cmd_publish(args):
+    real_stdout = sys.stdout
+    if args.json:
+        # 过程日志全部走 stderr，stdout 只留最终 JSON，方便 Agent 直接解析
+        sys.stdout = sys.stderr
+    profile = _profile_path(args)
+    if not profile.is_dir():
+        manifest.fail(f"未找到浏览器登录档案 {profile}，请先跑: douyin-publisher login")
+    try:
+        items = manifest.load_manifest(Path(args.manifest))
+    except manifest.ManifestError as e:
+        manifest.fail(str(e))
+
+    for i, it in enumerate(items, 1):
+        it["_idx"] = i
+
+    if args.only:
+        wanted = {int(x) for x in args.only.split(",")}
+        items = [it for it in items if it["_idx"] in wanted]
+        print(f"补跑模式：只处理第 {sorted(wanted)} 集，共 {len(items)} 条")
+
+    if args.now and args.at:
+        manifest.fail("--now 与 --at 不能同时使用")
+    if args.now:
+        for it in items:
+            it["publish_at"] = ""
+        print("已按 --now 强制立即发布（覆盖清单 publish_at）")
+    elif args.at:
+        try:
+            manifest.datetime_from_str(args.at)
+        except ValueError:
+            manifest.fail(f"--at 格式应为 'YYYY-MM-DD HH:MM'，实际: {args.at}")
+        for it in items:
+            it["publish_at"] = args.at.strip()
+        print(f"已按 --at 统一定时发布: {args.at}")
+
+    if args.visibility:
+        for it in items:
+            it["visibility"] = args.visibility
+        print(f"已按 --visibility 统一设置可见范围: {args.visibility}")
+    if args.declaration is not None:
+        for it in items:
+            it["declaration"] = args.declaration
+        print(f"已按 --declaration 统一设置自主声明: {args.declaration or '（不设置）'}")
+    if args.no_save:
+        for it in items:
+            it["allow_save"] = False
+        print("已按 --no-save 关闭保存权限")
+    if args.no_collection:
+        for it in items:
+            it["collection"] = ""
+        print("已按 --no-collection 取消合集")
+    elif args.collection is not None:
+        for it in items:
+            it["collection"] = args.collection
+        print(f"已按 --collection 统一设置合集: {args.collection or '（不设置）'}")
+
+    interactive = bool(args.interactive)
+    print(f"预检通过：{len(items)} 集，模式={'执行' if args.execute else 'DRY-RUN'}")
+    if args.execute and not interactive:
+        print("[非交互] execute 模式将逐集自动发布，请确认你已批准本批次！")
+
+    if args.json:
+        results = uploader.run_batch(
+            items, profile, args.execute, args.yes, args.interval, interactive
+        )
+        payload = {
+            "ok": uploader.exit_code(results) == 0,
+            "mode": "execute" if args.execute else "dryrun",
+            "manifest": str(Path(args.manifest).resolve()),
+            "results": results,
+        }
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+        if args.result_file:
+            _write_json(args.result_file, payload)
+        print(text, file=real_stdout)
+        sys.exit(0 if payload["ok"] else 1)
+
+    results = uploader.run_batch(items, profile, args.execute, args.yes, args.interval, interactive)
+    if args.result_file:
+        _write_json(args.result_file, {"results": results})
+    sys.exit(uploader.summarize(results))
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        prog="douyin-publisher",
+        description="抖音成品视频批量发布（浏览器自动化，Agent-first，dry-run 默认）",
+    )
+    ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p_login = sub.add_parser("login", help="扫码登录并保存登录态")
+    p_login.add_argument("--profile", default=None, help="浏览器档案目录（默认 ~/.douyin_publisher/chrome-profile）")
+    p_login.set_defaults(func=cmd_login)
+
+    p_gen = sub.add_parser("gen", help="扫描系列目录生成发布清单骨架")
+    p_gen.add_argument("series_dir")
+    p_gen.add_argument("-o", "--output", default=None)
+    p_gen.add_argument("--prefer", default="卡点版", help="优先匹配的文件名关键字（默认 卡点版）")
+    p_gen.set_defaults(func=cmd_gen)
+
+    p_doc = sub.add_parser("doctor", help="自检：CLI/档案/浏览器/登录态")
+    p_doc.add_argument("--deep", action="store_true", help="打开浏览器实际验证登录态（约 10 秒）")
+    p_doc.add_argument("--json", action="store_true", help="输出 JSON")
+    p_doc.add_argument("--profile", default=None, help="浏览器档案目录")
+    p_doc.set_defaults(func=cmd_doctor)
+
+    p_pub = sub.add_parser("publish", help="按清单批量发布")
+    p_pub.add_argument("manifest")
+    p_pub.add_argument("--execute", action="store_true", help="真发布（默认 dry-run）")
+    p_pub.add_argument("--yes", action="store_true", help="execute 模式下免逐集确认（不建议）")
+    p_pub.add_argument("--interval", type=int, default=config.DEFAULT_INTERVAL, help="集间隔秒数基准")
+    p_pub.add_argument("--only", default=None, help="只跑指定序号，如 --only 3,5（补跑失败集）")
+    p_pub.add_argument("--profile", default=None, help="浏览器档案目录")
+    p_pub.add_argument("--at", default=None,
+                       help="统一定时发布时间，如 '2026-10-18 08:10'（覆盖清单 publish_at）")
+    p_pub.add_argument("--now", action="store_true",
+                       help="强制立即发布（覆盖清单 publish_at）")
+    p_pub.add_argument("--visibility", choices=config.VISIBILITIES, default=None,
+                       help="统一设置谁可以看（覆盖清单 visibility）")
+    p_pub.add_argument("--declaration", choices=config.DECLARATIONS, default=None,
+                       help="统一设置自主声明（覆盖清单 declaration）")
+    p_pub.add_argument("--no-save", action="store_true",
+                       help="保存权限设为「不允许」")
+    p_pub.add_argument("--collection", default=None,
+                       help="统一设置合集名（覆盖清单 collection）")
+    p_pub.add_argument("--no-collection", action="store_true",
+                       help="取消合集（覆盖清单 collection）")
+    p_pub.add_argument("--interactive", action="store_true",
+                       help="逐集人工确认（默认关闭，适合 Agent 批处理）")
+    p_pub.add_argument("--non-interactive", action="store_true", help=argparse.SUPPRESS)
+    p_pub.add_argument("--json", action="store_true",
+                       help="stdout 只输出结果 JSON（过程日志走 stderr）")
+    p_pub.add_argument("--result-file", default=None,
+                       help="把结果 JSON 另存到文件")
+    p_pub.set_defaults(func=cmd_publish)
+
+    args = ap.parse_args()
+    if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
