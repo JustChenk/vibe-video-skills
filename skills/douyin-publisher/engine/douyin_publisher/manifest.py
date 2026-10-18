@@ -17,7 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import config
+from . import config, topics
 
 # 扫描系列目录时跳过的子目录（工程中间产物，不含成片）
 SKIP_DIRS = {"frames", "preview", "tmp", "research", "tools", "auth", "logs"}
@@ -62,6 +62,39 @@ def gen_manifest(series_dir: Path, prefer: str = "卡点版") -> dict:
     }
 
 
+def validate_topics(tp, idx: int):
+    """校验 topics 配置；总话题数按 1(theme) + pin + count <= 5 限制。"""
+    if not isinstance(tp, dict):
+        raise ManifestError(f"第 {idx} 集 topics 必须是对象")
+    theme = tp.get("theme", "")
+    if theme and not isinstance(theme, str):
+        raise ManifestError(f"第 {idx} 集 topics.theme 必须是字符串")
+    pin = tp.get("pin", [])
+    if not isinstance(pin, list) or any(not isinstance(x, str) for x in pin):
+        raise ManifestError(f"第 {idx} 集 topics.pin 必须是字符串数组")
+    seeds = tp.get("seeds", [])
+    if not isinstance(seeds, list) or any(
+        not isinstance(x, str) or not x.strip() for x in seeds
+    ):
+        raise ManifestError(f"第 {idx} 集 topics.seeds 必须是非空字符串数组")
+    count = tp.get("count", 3)
+    if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+        raise ManifestError(f"第 {idx} 集 topics.count 必须是 >=1 的整数")
+    extra_pin = len({topics.norm(x) for x in pin if topics.norm(x)} - {topics.norm(theme)})
+    if 1 + extra_pin + count > topics.MAX_TOPICS:
+        raise ManifestError(
+            f"第 {idx} 集话题总数超过 {topics.MAX_TOPICS} 个："
+            f"主题 1 + pin {extra_pin} + 热度 {count}；请减少 count 或 pin"
+        )
+    try:
+        topics.parse_heat(tp.get("min_heat", topics.MIN_HEAT))
+    except ValueError as e:
+        raise ManifestError(f"第 {idx} 集 topics.min_heat: {e}")
+    mps = tp.get("max_per_seed", 1)
+    if not isinstance(mps, int) or isinstance(mps, bool) or mps < 1:
+        raise ManifestError(f"第 {idx} 集 topics.max_per_seed 必须是 >=1 的整数")
+
+
 def load_manifest(path: Path, check_texts: bool = True) -> list[dict]:
     """读取并预检清单，返回 items。失败时打印原因并退出。"""
     try:
@@ -74,6 +107,7 @@ def load_manifest(path: Path, check_texts: bool = True) -> list[dict]:
         raise ManifestError("清单里没有 items（或为空）")
 
     for i, it in enumerate(items, 1):
+        it["_series"] = manifest.get("series", "")
         p = Path(it.get("file", ""))
         if not p.exists():
             raise ManifestError(f"第 {i} 集文件不存在: {p}")
@@ -81,6 +115,8 @@ def load_manifest(path: Path, check_texts: bool = True) -> list[dict]:
             raise ManifestError(f"第 {i} 集 text 为空")
         if check_texts and PLACEHOLDER_MARK in it.get("text", ""):
             raise ManifestError(f"第 {i} 集文案还是占位符，先填 text")
+        if it.get("topics"):
+            validate_topics(it["topics"], i)
         cover = it.get("cover", "")
         if cover and not Path(cover).exists():
             raise ManifestError(f"第 {i} 集竖封面不存在: {cover}")

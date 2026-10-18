@@ -4,14 +4,16 @@
   douyin-publisher login   [--profile DIR]
   douyin-publisher gen     <系列目录> [-o 清单.json] [--prefer 关键字]
   douyin-publisher doctor  [--deep] [--json]
+  douyin-publisher topics  --seed 创业 --seed 职场 [--theme 主题名] [--json]
   douyin-publisher publish <清单.json> [--execute] [--at 时间] [--json]
 """
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
-from . import __version__, auth, config, manifest, uploader
+from . import __version__, auth, config, manifest, topics, uploader
 
 
 def _profile_path(args) -> Path:
@@ -72,6 +74,84 @@ def cmd_doctor(args):
             flag = "OK" if c["ok"] else ("--" if c["ok"] is None else "!!")
             print(f"[{flag}] {c['name']}: {c['detail']}")
     sys.exit(0 if ok else 1)
+
+
+def cmd_topics(args):
+    """只查话题热度并出选词结果，不上传、不改发布状态。"""
+    profile = _profile_path(args)
+    if not profile.is_dir():
+        manifest.fail(f"未找到浏览器登录档案 {profile}，请先跑: douyin-publisher login")
+
+    theme = args.theme
+    pin = list(args.pin or [])
+    seeds = list(args.seed or [])
+    if args.seeds:
+        seeds += [s.strip() for s in args.seeds.split(",") if s.strip()]
+    count = args.count
+    min_heat = args.min_heat
+    max_per_seed = args.max_per_seed
+
+    if args.manifest:
+        items = manifest.load_manifest(Path(args.manifest))
+        idx = args.index - 1
+        if idx < 0 or idx >= len(items):
+            manifest.fail(f"--index {args.index} 超出范围（清单共 {len(items)} 条）")
+        tp = items[idx].get("topics") or {}
+        theme = args.theme or tp.get("theme") or items[idx].get("_series", "")
+        pin = args.pin or tp.get("pin") or []
+        seeds = seeds or tp.get("seeds") or []
+        count = count if count is not None else tp.get("count", 3)
+        min_heat = min_heat if min_heat is not None else tp.get("min_heat", topics.MIN_HEAT)
+        max_per_seed = (
+            max_per_seed if max_per_seed is not None else tp.get("max_per_seed", 1)
+        )
+
+    if not seeds:
+        manifest.fail("至少给一个 --seed，或用 --manifest 读清单里的 topics.seeds")
+
+    cfg = {
+        "theme": theme or "",
+        "pin": pin,
+        "seeds": seeds,
+        "min_heat": min_heat if min_heat is not None else topics.MIN_HEAT,
+        "count": count if count is not None else 3,
+        "max_per_seed": max_per_seed if max_per_seed is not None else 1,
+    }
+
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        ctx = p.chromium.launch_persistent_context(
+            str(profile), channel="chrome", headless=False,
+            viewport={"width": 1440, "height": 900}, locale="zh-CN",
+        )
+        try:
+            page = ctx.new_page()
+            page.goto(config.HOME_URL, wait_until="domcontentloaded", timeout=30000)
+            time.sleep(3)
+            if auth._find_logged_in_page(ctx) is None:
+                manifest.fail("登录态失效（未检测到创作者中心导航），请先跑 douyin-publisher login")
+            plan = topics.resolve(ctx, cfg, series=theme or "")
+        finally:
+            ctx.close()
+
+    payload = {
+        "ok": plan["api_ok"],
+        "theme": plan["theme"],
+        "pinned": plan["pinned"],
+        "selected": plan["selected"],
+        "names": plan["names"],
+        "stats": plan["stats"],
+        "min_heat": plan["min_heat"],
+        "candidates": plan["candidates"],
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        topics.print_plan(plan)
+        if not plan["api_ok"]:
+            print("!! 话题接口没有返回数据（可能登录态失效或接口改版）")
+    sys.exit(0 if plan["api_ok"] else 1)
 
 
 def cmd_publish(args):
@@ -181,6 +261,26 @@ def main():
     p_doc.add_argument("--json", action="store_true", help="输出 JSON")
     p_doc.add_argument("--profile", default=None, help="浏览器档案目录")
     p_doc.set_defaults(func=cmd_doctor)
+
+    p_top = sub.add_parser("topics", help="按热度筛选话题（只查询，不上传不发布）")
+    p_top.add_argument("--seed", action="append", default=[],
+                       help="候选关键词，可重复（约 10 个）")
+    p_top.add_argument("--seeds", default=None, help="逗号分隔的候选关键词")
+    p_top.add_argument("--theme", default=None, help="第 1 个话题（主题名，豁免热度）")
+    p_top.add_argument("--pin", action="append", default=[],
+                       help="额外置顶话题（豁免热度），可重复")
+    p_top.add_argument("--min-heat", default=None,
+                       help="热度阈值，如 1亿 / 100000000（默认 1亿）")
+    p_top.add_argument("--count", type=int, default=None, help="按热度选几个（默认 3）")
+    p_top.add_argument("--max-per-seed", type=int, default=None,
+                       help="每个 seed 最多入选几个（默认 1，保证分散）")
+    p_top.add_argument("--manifest", default=None,
+                       help="从清单某条的 topics 配置读取 seed/theme/pin")
+    p_top.add_argument("--index", type=int, default=1,
+                       help="配合 --manifest 指定第几条（默认 1）")
+    p_top.add_argument("--json", action="store_true", help="输出 JSON")
+    p_top.add_argument("--profile", default=None, help="浏览器档案目录")
+    p_top.set_defaults(func=cmd_topics)
 
     p_pub = sub.add_parser("publish", help="按清单批量发布")
     p_pub.add_argument("manifest")

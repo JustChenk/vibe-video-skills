@@ -14,7 +14,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-from . import config
+from . import config, topics
 
 LOGS = Path(__file__).resolve().parent.parent / "logs"
 
@@ -116,8 +116,60 @@ def fill_title(page, title: str):
     return True
 
 
-def fill_text(page, body: str, tags):
-    """描述区：先写正文（多行），再逐个输入 #话题 触发联想。"""
+def _find_topic_item(page, name, timeout=4.0):
+    """在 # 联想浮层里找名字完全一致的话题项。
+
+    选择器用 [class*=tag-hash]：抖音的 class 带构建哈希（tag-dVUDkJ tag-hash-o0tpyE），
+    但 tag-hash 这个语义前缀稳定；容器 .mention-suggest-item-container 不含它，避免误点整列。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        items = page.locator("[class*='mention-suggest'] [class*='tag-hash']")
+        try:
+            count = items.count()
+        except Exception:
+            count = 0
+        for i in range(count):
+            it = items.nth(i)
+            try:
+                text = it.inner_text()
+            except Exception:
+                continue
+            head = (text.splitlines()[0] if text else "").strip().lstrip("#").strip()
+            if head == name:
+                return it
+        time.sleep(0.2)
+    return None
+
+
+def insert_topic(page, name):
+    """输入 #话题名；命中联想项就点选（生成真话题节点），否则退化为纯文本。
+
+    点选后的节点结构：<div data-mention="#">…<span>#话题</span>…</div>，
+    与纯键盘输入的 #文本 不同，是平台认可的话题实体。
+    """
+    page.keyboard.type("#" + name)
+    item = _find_topic_item(page, name)
+    if item is not None:
+        try:
+            # 点左侧名字区域，避开右侧热度文字
+            item.click(position={"x": 18, "y": 8})
+            time.sleep(0.35)
+            return True
+        except Exception:
+            pass
+    page.keyboard.press("Escape")
+    time.sleep(0.15)
+    page.keyboard.press("Space")
+    time.sleep(0.2)
+    return False
+
+
+def fill_text(page, body: str, tags, bind=False):
+    """描述区：先写正文（多行），再逐个输入 #话题。
+
+    bind=True 时逐个点选联想项（话题实体，带 cid）；False 保持旧行为（纯文本）。
+    """
     editor, sel = find_first(page, "editor")
     if not editor:
         raise RuntimeError("找不到文案编辑器（SELECTORS.editor 全部未命中）")
@@ -132,16 +184,26 @@ def fill_text(page, body: str, tags):
     if body_lines and tags:
         page.keyboard.press("Shift+Enter")
         time.sleep(0.2)
+    bound = 0
     for tag in tags:
-        page.keyboard.type("#" + tag)
-        time.sleep(0.3)
-        page.keyboard.press("Space")
-        time.sleep(0.2)
+        if bind:
+            if insert_topic(page, tag):
+                bound += 1
+            else:
+                print(f"    [警告] 话题 #{tag} 未命中联想项，已按纯文本写入")
+        else:
+            page.keyboard.type("#" + tag)
+            time.sleep(0.3)
+            page.keyboard.press("Space")
+            time.sleep(0.2)
     print(f"  已填正文 {len(body_lines)} 行 + {len(tags)} 个话题（{sel}）")
+    if bind:
+        print(f"  话题实体绑定 {bound}/{len(tags)} 个")
     time.sleep(0.5)
     # 收起话题联想浮层，避免挡住后续按钮
     page.keyboard.press("Escape")
     time.sleep(0.3)
+    return bound
 
 
 def _click_cover_entry(page, mode="vertical", timeout=10):
@@ -516,8 +578,25 @@ def publish_one(ctx, item, idx, execute, interactive=True):
     # 2. 标题 + 正文 + 话题
     title, body, tags = split_manifest_text(item["text"])
     has_title_input = fill_title(page, title)
-    if body or tags:
-        fill_text(page, body, tags)
+
+    chosen, bind = tags, False
+    if item.get("topics"):
+        try:
+            plan = topics.resolve(
+                ctx, item["topics"], fallback_seeds=tags, series=item.get("_series", "")
+            )
+            topics.print_plan(plan)
+            if plan["api_ok"] and plan["names"]:
+                chosen, bind = plan["names"], True
+            elif not plan["api_ok"]:
+                print("  [警告] 话题热度接口不可用，回退清单里的 #话题")
+            else:
+                print("  [警告] 没有可用话题，回退清单里的 #话题")
+        except Exception as e:
+            print(f"  [警告] 话题热度筛选失败（{e}），回退清单里的 #话题")
+
+    if body or chosen:
+        fill_text(page, body, chosen, bind=bind)
     elif not has_title_input:
         # 没有独立标题框且没有正文/话题：整段写进描述区
         fill_text(page, title, [])
@@ -580,10 +659,10 @@ def publish_one(ctx, item, idx, execute, interactive=True):
                 break
         if ans == "q":
             page.close()
-            return {"status": "abort", "url": page.url}
+            return {"status": "abort", "url": page.url, "topics": chosen}
         if ans == "s":
             page.close()
-            return {"status": "skip", "url": page.url}
+            return {"status": "skip", "url": page.url, "topics": chosen}
 
     if execute:
         btn, _ = find_first(page, "publish_btn")
@@ -614,10 +693,10 @@ def publish_one(ctx, item, idx, execute, interactive=True):
         shot(page, f"published_{idx}")
         print(f"  发布{'成功' if ok else '结果未知（看截图）'}")
         page.close()
-        return {"status": "ok" if ok else "unknown", "url": page.url}
+        return {"status": "ok" if ok else "unknown", "url": page.url, "topics": chosen}
     else:
         page.close()
-        return {"status": "dryrun", "url": page.url}
+        return {"status": "dryrun", "url": page.url, "topics": chosen}
 
 
 # ---------------------------------------------------------------- 批量入口
