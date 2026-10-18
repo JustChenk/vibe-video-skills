@@ -11,11 +11,12 @@
 
 选词规则（用户 2026-10-18 定）：
 1. 第 1 个话题固定为主题名（theme），豁免热度；
-2. 第 2 个可用 pin 指定（豁免热度，"随意"但建议相关）；
+2. 第 2 个起可用 pin 指定（list，豁免热度，"随意"但建议相关）；
 3. 其余从 seed（约 10 个）的联想结果里按热度挑：view_count >= min_heat（默认 1 亿）、
    话题名必须包含 seed（相关性闸门，防止 "AED" 选出 "#艾尔登法环"）、
    每个 seed 最多 max_per_seed 个、按热度降序，取 count 个；
-4. 总话题数不超过 MAX_TOPICS（抖音描述区上限 5）。
+4. **count 默认填满到 MAX_TOPICS（抖音描述区上限 5）**，用户可自定义数量，上限 5；
+   候选不足（接口失效/热度不达标）时按实际能选到的数量出，不报错。
 """
 
 import re
@@ -108,6 +109,17 @@ def _pinned_entry(ctx, name, source, cache):
     }
 
 
+def _norm_count(value, default=None):
+    """count 归一化：None/缺省走 default（默认填满到 MAX_TOPICS）；用户给值则钳到 [0, MAX_TOPICS]。"""
+    if value is None:
+        return default
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"话题数量无法识别: {value!r}（示例：3 / 5）")
+    return max(0, min(n, MAX_TOPICS))
+
+
 def resolve(ctx, cfg, fallback_seeds=(), series="", cache=None):
     """执行选词，返回可直接交给页面填写的计划。
 
@@ -116,14 +128,14 @@ def resolve(ctx, cfg, fallback_seeds=(), series="", cache=None):
       pin          第 2 个起额外置顶的话题（list，豁免热度）
       seeds        约 10 个候选关键词
       min_heat     热度阈值（默认 1 亿）
-      count        按热度选几个（默认 3）
+      count        按热度选几个（默认 None = 填满到 MAX_TOPICS=5，用户可自定义，上限 5）
       max_per_seed 每个 seed 最多入选几个（默认 1，保证话题分散）
     """
     theme = norm(cfg.get("theme") or series)
     pin = [norm(x) for x in (cfg.get("pin") or []) if norm(x)]
     seeds = [norm(x) for x in (cfg.get("seeds") or fallback_seeds) if norm(x)]
     min_heat = parse_heat(cfg.get("min_heat", MIN_HEAT))
-    count = int(cfg.get("count", 3))
+    count = _norm_count(cfg.get("count"), default=None)
     max_per_seed = max(1, int(cfg.get("max_per_seed", 1)))
     if cache is None:
         cache = {}
@@ -134,6 +146,8 @@ def resolve(ctx, cfg, fallback_seeds=(), series="", cache=None):
             seen.add(name.casefold())
             pinned.append(_pinned_entry(ctx, name, source, cache))
     pinned = pinned[:MAX_TOPICS]
+    if count is None:
+        count = MAX_TOPICS - len(pinned)
     count = max(0, min(count, MAX_TOPICS - len(pinned)))
 
     candidates, seen = [], set(p["name"].casefold() for p in pinned)

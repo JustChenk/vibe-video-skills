@@ -101,7 +101,7 @@ def cmd_topics(args):
         theme = args.theme or tp.get("theme") or items[idx].get("_series", "")
         pin = args.pin or tp.get("pin") or []
         seeds = seeds or tp.get("seeds") or []
-        count = count if count is not None else tp.get("count", 3)
+        count = count if count is not None else tp.get("count")
         min_heat = min_heat if min_heat is not None else tp.get("min_heat", topics.MIN_HEAT)
         max_per_seed = (
             max_per_seed if max_per_seed is not None else tp.get("max_per_seed", 1)
@@ -115,7 +115,7 @@ def cmd_topics(args):
         "pin": pin,
         "seeds": seeds,
         "min_heat": min_heat if min_heat is not None else topics.MIN_HEAT,
-        "count": count if count is not None else 3,
+        "count": count,
         "max_per_seed": max_per_seed if max_per_seed is not None else 1,
     }
 
@@ -304,7 +304,7 @@ def main():
                        help="额外置顶话题（豁免热度），可重复")
     p_top.add_argument("--min-heat", default=None,
                        help="热度阈值，如 1亿 / 100000000（默认 1亿）")
-    p_top.add_argument("--count", type=int, default=None, help="按热度选几个（默认 3）")
+    p_top.add_argument("--count", type=int, default=None, help="按热度选几个（默认填满到 5；可自定义，上限 5）")
     p_top.add_argument("--max-per-seed", type=int, default=None,
                        help="每个 seed 最多入选几个（默认 1，保证分散）")
     p_top.add_argument("--manifest", default=None,
