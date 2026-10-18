@@ -3,4 +3,4 @@
 子命令：login（扫码登录）/ gen（生成发布清单）/ doctor（自检）/ topics（话题热度筛选）/ publish（批量发布）。
 """
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"

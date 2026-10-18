@@ -3,6 +3,7 @@
 import csv
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from douyin_publisher import history
@@ -66,6 +67,7 @@ class HistoryTest(unittest.TestCase):
         self.assertEqual(rows[0][0], "时间")
         self.assertEqual(rows[1][3], "标题|带竖线")  # CSV 原样保留
         self.assertEqual(rows[1][10], "清单.json")
+        self.assertFalse((self.path.parent / ".gitignore").exists())  # 自定义目录不乱丢 .gitignore
 
     def test_append_without_duplicate_header(self):
         history.record([make_item()], [make_result()], "清单.json", self.path)
@@ -101,10 +103,50 @@ class HistoryTest(unittest.TestCase):
         self.assertEqual(rows[0]["结果"], "定时已设置")
         self.assertEqual(rows[0]["发布方式"], "2026-10-19 08:10")
 
+    def test_new_custom_dir_self_ignores(self):
+        d = Path(self.tmp.name) / "records"
+        info = history.record([make_item()], [make_result()], "清单.json", d)
+        self.assertEqual(Path(info["md"]), d / "发布记录.md")
+        self.assertTrue((d / ".gitignore").exists())
+        self.assertIn("*", (d / ".gitignore").read_text(encoding="utf-8"))
+
     def test_resolve_path(self):
         d = Path(self.tmp.name) / "记录目录"
         self.assertEqual(history.resolve_path(d), d / "发布记录.md")
         self.assertEqual(history.resolve_path(self.path.with_suffix(".csv")), self.path)
+
+    def test_default_path_uses_project_root(self):
+        root = Path(self.tmp.name) / "proj"
+        (root / ".git").mkdir(parents=True)
+        manifest = root / "tmp" / "publish" / "清单.json"
+        manifest.parent.mkdir(parents=True)
+        self.assertEqual(
+            history.default_md(manifest), root / ".douyin-publisher" / "发布记录.md"
+        )
+        self.assertEqual(
+            history.resolve_path(None, manifest), root / ".douyin-publisher" / "发布记录.md"
+        )
+
+    def test_default_path_fallback_to_manifest_dir(self):
+        root = Path(self.tmp.name) / "plain"
+        root.mkdir()
+        manifest = root / "清单.json"
+        with unittest.mock.patch.object(history, "find_project_root", return_value=None):
+            self.assertEqual(
+                history.default_md(manifest), root / ".douyin-publisher" / "发布记录.md"
+            )
+
+    def test_record_uses_manifest_project(self):
+        root = Path(self.tmp.name) / "proj2"
+        (root / ".git").mkdir(parents=True)
+        manifest = root / "tmp" / "publish" / "清单.json"
+        manifest.parent.mkdir(parents=True)
+        info = history.record([make_item()], [make_result()], manifest)
+        self.assertEqual(
+            Path(info["md"]), root / ".douyin-publisher" / "发布记录.md"
+        )
+        self.assertTrue(Path(info["csv"]).exists())
+        self.assertTrue((root / ".douyin-publisher" / ".gitignore").exists())
 
 
 if __name__ == "__main__":

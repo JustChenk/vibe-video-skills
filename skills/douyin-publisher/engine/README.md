@@ -213,10 +213,15 @@ douyin-publisher topics --manifest 清单.json --index 1
 
 ## 发布记录（v0.7+）
 
-每次 `--execute` 真发布后，自动把每集结果追加到：
+每次 `--execute` 真发布后，自动把每集结果追加到 **项目目录**（不是用户主目录）：
 
-- `~/.douyin_publisher/发布记录.md`（人读，Markdown 表格）
-- `~/.douyin_publisher/发布记录.csv`（Excel 直接打开，UTF-8 BOM）
+- `<项目根>/.douyin-publisher/发布记录.md`（人读，Markdown 表格）
+- `<项目根>/.douyin-publisher/发布记录.csv`（Excel 直接打开，UTF-8 BOM）
+
+项目根从清单路径向上找 `.git` / `.workbuddy` / `AGENTS.md` / `CLAUDE.md` 判定；找不到就落在清单所在目录。
+**不默认写进 skill 仓库**（`engine/` 属于公开仓库，账号数据不应进去）；要换位置用 `--history`。
+新建记录目录时工具会自动放一个 `.gitignore`（`*` + `!.gitignore`），所以即使 `--history <skill>/records`
+也不会把记录误提交。
 
 dry-run 不写，避免刷屏。路径可用 `--history <文件或目录>` 改（目录则落 `<目录>/发布记录.md`），
 `--no-history` 关闭。记录是追加式，多次发布累积在一张表里。
@@ -226,8 +231,9 @@ dry-run 不写，避免刷屏。路径可用 `--history <文件或目录>` 改�
 
 ```bash
 douyin-publisher history --limit 10
-douyin-publisher history --json            # 从同名 CSV 读结构化数据
-douyin-publisher history --path D:/records # 指定别的记录目录
+douyin-publisher history --manifest 清单.json   # 不在项目根目录跑时，按清单定位项目
+douyin-publisher history --json                 # 从同名 CSV 读结构化数据
+douyin-publisher history --path D:/records      # 指定别的记录目录
 ```
 
 示例行：

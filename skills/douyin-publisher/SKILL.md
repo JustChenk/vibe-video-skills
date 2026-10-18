@@ -1,13 +1,13 @@
 ---
 name: douyin-publisher
 description: "抖音成品视频批量发布：把一个系列的成片 mp4 批量上传到抖音创作者平台并逐集填标题话题/定时发布。引导 Agent 用 douyin-publisher CLI（login 扫码 / gen 生成清单 / publish 批量发布，dry-run 默认）完成发布全流程，包括：从分镜脚本提取每集标题话题填清单、首跑校准页面选择器、非交互批处理模式、失败集补跑、风控纪律与合集处理建议。触发词：发布抖音、批量上传、上传抖音、发布视频到抖音、抖音发布清单、douyin publisher、发抖音、系列视频发布"
-version: "1.4.0"
+version: "1.4.1"
 
 author: "CodeBuddy AI"
 
 created: "2026-10-16"
 
-changelog: "1.0.0 首个版本。源自 douyin-publisher 项目实战立项：调研确认抖音开放平台 OpenAPI 对个人主体不可行，故走创作者中心网页端 + Playwright 浏览器自动化路线。1.1.0（2026-10-18）对齐工具 v0.3 实战（Ep07 首跑 + Ep08-10 定时发布）：登录改持久化 Chrome 档案；封面自动化；manifest 新增 collection/aigc；--at/--now 统一定时；发布按钮精确匹配；keepalive。1.2.0（2026-10-18）Agent-first：工具并入本 skill 的 engine/ 统一管理；新增 doctor 自检、publish --json（stdout 纯 JSON + 错误码）、默认非交互（--interactive 才逐集确认）；manifest 新增 visibility/declaration/allow_save；合集与非公开可见互斥。1.3.0（2026-10-18）话题热度筛选：manifest 新增 topics（theme/pin/seeds/min_heat/count），实时查 challengesug 播放量、按 ≥1亿 选最热、点选绑定话题实体；新增 topics 子命令；总话题数上限 5。1.4.0（2026-10-18）发布记录：真发布后自动追加 Markdown + CSV（默认 ~/.douyin_publisher/发布记录.md，话题带热度、失败带 error_code），新增 history 子命令与 --history/--no-history。"
+changelog: "1.0.0 首个版本。源自 douyin-publisher 项目实战立项：调研确认抖音开放平台 OpenAPI 对个人主体不可行，故走创作者中心网页端 + Playwright 浏览器自动化路线。1.1.0（2026-10-18）对齐工具 v0.3 实战（Ep07 首跑 + Ep08-10 定时发布）：登录改持久化 Chrome 档案；封面自动化；manifest 新增 collection/aigc；--at/--now 统一定时；发布按钮精确匹配；keepalive。1.2.0（2026-10-18）Agent-first：工具并入本 skill 的 engine/ 统一管理；新增 doctor 自检、publish --json（stdout 纯 JSON + 错误码）、默认非交互（--interactive 才逐集确认）；manifest 新增 visibility/declaration/allow_save；合集与非公开可见互斥。1.3.0（2026-10-18）话题热度筛选：manifest 新增 topics（theme/pin/seeds/min_heat/count），实时查 challengesug 播放量、按 ≥1亿 选最热、点选绑定话题实体；新增 topics 子命令；总话题数上限 5。1.4.0（2026-10-18）发布记录：真发布后自动追加 Markdown + CSV（默认 <项目根>/.douyin-publisher/发布记录.md，话题带热度、失败带 error_code），新增 history 子命令与 --history/--no-history。1.4.1（2026-10-18）发布记录默认改为项目根 `.douyin-publisher/`（按清单向上找 .git/.workbuddy/AGENTS.md，不写用户主目录），新增 history --manifest 定位；新建记录目录自动 .gitignore。"
 ---
 
 # 抖音成品视频批量发布（douyin-publisher）
@@ -85,12 +85,12 @@ douyin-publisher publish <清单> --execute --json --result-file logs/result.jso
 - 只用真实浏览器（工具已固化 headless=False），别为省资源改 headless——风控概率大增。
 - `--json` 结果里的 `error_code` 用于决策：`auth_expired` 先扫码；`selector_drift` 去校准；
   `platform_rejected` 看平台限制；`upload_timeout` 可 `--only` 补跑。
-- 真发布后自动追加发布记录（默认 `~/.douyin_publisher/发布记录.md` + 同名 CSV）；换路径用 `--history`，不写用 `--no-history`。
+- 真发布后自动追加发布记录到 `<项目根>/.douyin-publisher/发布记录.md` + 同名 CSV（项目根按清单向上找 `.git`/`.workbuddy`/`AGENTS.md` 判定）；换路径用 `--history`，不写用 `--no-history`。
 
 ### 第 5 步：验收与收尾
 
 - 看输出末尾"结果汇总"；失败/未知集用 `--only <序号>` 补跑。
-- 发布后 `douyin-publisher history --limit 10` 核对最新记录（状态、话题热度、失败原因）；记录文件默认在 `~/.douyin_publisher/发布记录.md`，同名 CSV 可直接用 Excel 打开。
+- 发布后 `douyin-publisher history --limit 10` 核对最新记录（状态、话题热度、失败原因）；默认在项目根 `.douyin-publisher/`，同名 CSV 可直接用 Excel 打开；不在项目根跑时加 `--manifest <清单>`。
 - 成功判据：页面跳转进入 content/post/video 或出现「发布成功」；发布后在 App 里抽查封面/合集/声明是否符合预期。
 - 登录档案等同账号凭证，绝不写进任何入库文件、不外传。
 

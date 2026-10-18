@@ -2,9 +2,11 @@
 """发布记录：把每次真发布的结果追加到 Markdown + CSV（Excel 可直接打开）。
 
 设计：
-- 默认落在 `~/.douyin_publisher/发布记录.md`，同名 CSV 并列；
+- 默认落在「项目根目录/.douyin-publisher/发布记录.md」，同名 CSV 并列；
+  项目根从清单路径向上找 `.git` / `.workbuddy` / `AGENTS.md` / `CLAUDE.md` 判定，
+  找不到就退回清单所在目录。**不写用户主目录**，也不默认写进 skill 仓库（那是公开仓库）。
 - 只在 `--execute`（真发布）后记录，dry-run 不写，避免刷屏；
-- Markdown 给人看/进仓库，CSV（utf-8-sig）给 Excel 看；
+- Markdown 给人看/进项目，CSV（utf-8-sig）给 Excel 看；
 - 写失败只警告，绝不影响发布主流程；
 - 话题列带热度（来自 topics.resolve 的 topic_details），方便复盘哪种话题组合有效。
 """
@@ -15,7 +17,7 @@ from pathlib import Path
 
 from .topics import format_heat
 
-DEFAULT_MD = Path.home() / ".douyin_publisher" / "发布记录.md"
+PROJECT_MARKERS = (".git", ".workbuddy", "AGENTS.md", "CLAUDE.md")
 
 HEADERS = [
     "时间", "状态", "系列", "标题", "文件", "合集",
@@ -31,9 +33,34 @@ _STATUS_CN = {
 }
 
 
-def resolve_path(path=None) -> Path:
-    """--history 可给 .md 文件、.csv 文件或目录；统一成 md 路径。"""
-    p = Path(path).expanduser() if path else DEFAULT_MD
+def find_project_root(start=None):
+    """从 start（文件或目录）向上找项目根；找不到返回 None。"""
+    p = Path(start).expanduser().resolve() if start else Path.cwd().resolve()
+    if not p.is_dir():
+        p = p.parent
+    for cand in [p, *p.parents]:
+        if any((cand / m).exists() for m in PROJECT_MARKERS):
+            return cand
+    return None
+
+
+def default_md(anchor=None) -> Path:
+    """默认记录路径：<项目根>/.douyin-publisher/发布记录.md。
+
+    anchor 传清单路径时按清单定位项目；不传则按当前工作目录。
+    找不到项目标记时退回 anchor 所在目录（不落到用户主目录）。
+    """
+    p = Path(anchor).expanduser().resolve() if anchor else Path.cwd().resolve()
+    start = p if p.is_dir() else p.parent
+    root = find_project_root(start) or start
+    return root / ".douyin-publisher" / "发布记录.md"
+
+
+def resolve_path(path=None, anchor=None) -> Path:
+    """--history 可给 .md 文件、.csv 文件或目录；不传则用项目内默认路径。"""
+    if not path:
+        return default_md(anchor)
+    p = Path(path).expanduser()
     if p.suffix.lower() in (".md", ".csv"):
         return p.with_suffix(".md")
     return p / "发布记录.md"
@@ -111,13 +138,25 @@ def build_rows(items, results, manifest_name="") -> list[list[str]]:
     return rows
 
 
+def _ensure_dir(d: Path):
+    """建目录；新建目录（或默认 .douyin-publisher）放自我忽略的 .gitignore。
+
+    只对“本次新建的目录”写，避免把用户已有的通用目录（如 tmp/）整体 ignore。
+    """
+    existed = d.exists()
+    d.mkdir(parents=True, exist_ok=True)
+    gi = d / ".gitignore"
+    if (d.name == ".douyin-publisher" or not existed) and not gi.exists():
+        gi.write_text("*\n!.gitignore\n", encoding="utf-8")
+
+
 def record(items, results, manifest_path=None, path=None) -> dict | None:
     """追加本次发布结果；没有可记录的行时返回 None。"""
     rows = build_rows(items, results, Path(manifest_path).name if manifest_path else "")
     if not rows:
         return None
-    md = resolve_path(path)
-    md.parent.mkdir(parents=True, exist_ok=True)
+    md = resolve_path(path, manifest_path)
+    _ensure_dir(md.parent)
     new_md = not md.exists() or md.stat().st_size == 0
     with md.open("a", encoding="utf-8", newline="\n") as f:
         if new_md:
@@ -138,9 +177,9 @@ def record(items, results, manifest_path=None, path=None) -> dict | None:
     return {"md": str(md), "csv": str(csv_path), "rows": len(rows)}
 
 
-def read_rows(path=None, limit=20) -> list[dict]:
+def read_rows(path=None, limit=20, anchor=None) -> list[dict]:
     """从 CSV 读结构化记录（没有 CSV 时退回解析 Markdown 表格）。"""
-    md = resolve_path(path)
+    md = resolve_path(path, anchor)
     csv_path = md.with_suffix(".csv")
     rows = []
     if csv_path.exists():
@@ -161,8 +200,8 @@ def read_rows(path=None, limit=20) -> list[dict]:
     return rows[-limit:] if limit else rows
 
 
-def tail_markdown(path=None, limit=20) -> str:
-    md = resolve_path(path)
+def tail_markdown(path=None, limit=20, anchor=None) -> str:
+    md = resolve_path(path, anchor)
     if not md.exists():
         return ""
     lines = [ln for ln in md.read_text(encoding="utf-8").splitlines() if ln.startswith("|")]

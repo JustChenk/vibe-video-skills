@@ -172,7 +172,7 @@ def _record_history(args, items, results):
 
 
 def cmd_history(args):
-    md = history.resolve_path(args.path)
+    md = history.resolve_path(args.path, args.manifest)
     if not md.exists():
         print(f"还没有发布记录：{md}")
         print("真发布一次后会自动生成（或发布时用 --history 指定路径）。")
@@ -344,13 +344,15 @@ def main():
     p_pub.add_argument("--result-file", default=None,
                        help="把结果 JSON 另存到文件")
     p_pub.add_argument("--history", default=None,
-                       help="发布记录 md 路径（默认 ~/.douyin_publisher/发布记录.md；同名 CSV 并列）")
+                       help="发布记录 md 路径（默认 <项目根>/.douyin-publisher/发布记录.md；同名 CSV 并列）")
     p_pub.add_argument("--no-history", action="store_true", help="不写发布记录")
     p_pub.set_defaults(func=cmd_publish)
 
     p_his = sub.add_parser("history", help="查看发布记录（最近 N 条）")
     p_his.add_argument("--path", default=None,
-                       help="记录 md 路径或目录（默认 ~/.douyin_publisher/发布记录.md）")
+                       help="记录 md 路径或目录（默认 <项目根>/.douyin-publisher/发布记录.md）")
+    p_his.add_argument("--manifest", default=None,
+                       help="按清单定位项目根（不在项目根目录跑时用）")
     p_his.add_argument("--limit", type=int, default=20, help="显示最近几条（默认 20）")
     p_his.add_argument("--json", action="store_true", help="输出 JSON（从同名 CSV 读）")
     p_his.set_defaults(func=cmd_history)
