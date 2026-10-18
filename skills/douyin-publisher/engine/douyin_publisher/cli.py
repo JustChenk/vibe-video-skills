@@ -5,6 +5,7 @@
   douyin-publisher gen     <系列目录> [-o 清单.json] [--prefer 关键字]
   douyin-publisher doctor  [--deep] [--json]
   douyin-publisher topics  --seed 创业 --seed 职场 [--theme 主题名] [--json]
+  douyin-publisher history [--limit 20] [--json]
   douyin-publisher publish <清单.json> [--execute] [--at 时间] [--json]
 """
 import argparse
@@ -13,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, auth, config, manifest, topics, uploader
+from . import __version__, auth, config, history, manifest, topics, uploader
 
 
 def _profile_path(args) -> Path:
@@ -154,6 +155,36 @@ def cmd_topics(args):
     sys.exit(0 if plan["api_ok"] else 1)
 
 
+def _record_history(args, items, results):
+    """真发布后追加 Markdown/CSV 记录；失败只警告，不阻断。"""
+    if args.no_history or not args.execute:
+        return
+    try:
+        info = history.record(items, results, Path(args.manifest), args.history)
+    except Exception as e:
+        print(f"!! 发布记录写入失败（不影响发布）: {e}", file=sys.stderr)
+        return
+    if not info:
+        return
+    stream = sys.stderr if args.json else sys.stdout
+    print(f"发布记录已追加：{info['md']}", file=stream)
+    print(f"           CSV：{info['csv']}（{info['rows']} 行）", file=stream)
+
+
+def cmd_history(args):
+    md = history.resolve_path(args.path)
+    if not md.exists():
+        print(f"还没有发布记录：{md}")
+        print("真发布一次后会自动生成（或发布时用 --history 指定路径）。")
+        return
+    if args.json:
+        rows = history.read_rows(md, args.limit)
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return
+    print(f"# {md}\n")
+    print(history.tail_markdown(md, args.limit))
+
+
 def cmd_publish(args):
     real_stdout = sys.stdout
     if args.json:
@@ -220,6 +251,7 @@ def cmd_publish(args):
         results = uploader.run_batch(
             items, profile, args.execute, args.yes, args.interval, interactive
         )
+        _record_history(args, items, results)
         payload = {
             "ok": uploader.exit_code(results) == 0,
             "mode": "execute" if args.execute else "dryrun",
@@ -233,6 +265,7 @@ def cmd_publish(args):
         sys.exit(0 if payload["ok"] else 1)
 
     results = uploader.run_batch(items, profile, args.execute, args.yes, args.interval, interactive)
+    _record_history(args, items, results)
     if args.result_file:
         _write_json(args.result_file, {"results": results})
     sys.exit(uploader.summarize(results))
@@ -310,7 +343,17 @@ def main():
                        help="stdout 只输出结果 JSON（过程日志走 stderr）")
     p_pub.add_argument("--result-file", default=None,
                        help="把结果 JSON 另存到文件")
+    p_pub.add_argument("--history", default=None,
+                       help="发布记录 md 路径（默认 ~/.douyin_publisher/发布记录.md；同名 CSV 并列）")
+    p_pub.add_argument("--no-history", action="store_true", help="不写发布记录")
     p_pub.set_defaults(func=cmd_publish)
+
+    p_his = sub.add_parser("history", help="查看发布记录（最近 N 条）")
+    p_his.add_argument("--path", default=None,
+                       help="记录 md 路径或目录（默认 ~/.douyin_publisher/发布记录.md）")
+    p_his.add_argument("--limit", type=int, default=20, help="显示最近几条（默认 20）")
+    p_his.add_argument("--json", action="store_true", help="输出 JSON（从同名 CSV 读）")
+    p_his.set_defaults(func=cmd_history)
 
     args = ap.parse_args()
     if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):

@@ -89,6 +89,9 @@ douyin-publisher publish 我的系列-清单.json `
   --declaration 内容为个人观点或见解 `
   --no-save --no-collection `
   --at "2026-10-18 08:10" --execute
+
+# 8. 查看发布记录（真发布后自动追加 md + csv）
+douyin-publisher history --limit 10
 ```
 
 定时规则：平台要求**至少 2 小时后、14 天内**；同一时间可以排多条（实测 3 条同时排入）。
@@ -108,7 +111,8 @@ douyin-publisher publish 我的系列-清单.json `
   "manifest": "D:/.../清单.json",
   "results": [
     {"index": 1, "status": "dryrun", "error_code": "", "error": "",
-     "url": "https://creator.douyin.com/creator-micro/content/post/video", "file": "..."}
+     "url": "https://creator.douyin.com/creator-micro/content/post/video", "file": "...",
+     "topics": ["人生高性价比指南", "程序员", "科普"]}
   ]
 }
 ```
@@ -122,7 +126,8 @@ douyin-publisher publish 我的系列-清单.json `
 
 其他常用参数：`--interval 180`（集间隔基准秒，实际随机 ×0.8~1.5）、`--only 3,5`（补跑失败集）、
 `--at '2026-10-18 08:10'` / `--now`（统一定时/立即）、`--visibility` / `--declaration` /
-`--no-save` / `--collection` / `--no-collection`（发布设置覆盖）、`--profile`（多账号浏览器档案目录）。
+`--no-save` / `--collection` / `--no-collection`（发布设置覆盖）、`--profile`（多账号浏览器档案目录）、
+`--history <文件/目录>`（发布记录路径）、`--no-history`（不写记录）。
 
 ## 发布清单格式
 
@@ -206,6 +211,31 @@ douyin-publisher topics --theme 主题名 --pin 相关词 --seed 词1 --seed 词
 douyin-publisher topics --manifest 清单.json --index 1
 ```
 
+## 发布记录（v0.7+）
+
+每次 `--execute` 真发布后，自动把每集结果追加到：
+
+- `~/.douyin_publisher/发布记录.md`（人读，Markdown 表格）
+- `~/.douyin_publisher/发布记录.csv`（Excel 直接打开，UTF-8 BOM）
+
+dry-run 不写，避免刷屏。路径可用 `--history <文件或目录>` 改（目录则落 `<目录>/发布记录.md`），
+`--no-history` 关闭。记录是追加式，多次发布累积在一张表里。
+
+列：时间 / 状态 / 系列 / 标题 / 文件 / 合集 / 话题（含热度）/ 发布方式 / 设置（可见范围·声明·封面）/ 结果 / 清单。
+失败也记（带 `error_code`），方便回头 `--only` 补跑。
+
+```bash
+douyin-publisher history --limit 10
+douyin-publisher history --json            # 从同名 CSV 读结构化数据
+douyin-publisher history --path D:/records # 指定别的记录目录
+```
+
+示例行：
+
+| 时间 | 状态 | 系列 | 标题 | 文件 | 合集 | 话题（热度） | 发布方式 | 设置 | 结果 | 清单 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-10-19 08:10 | 已定时 | 人生高性价比指南 | 动手前，先问会不会报案 | Ep11.mp4 | 人生高性价比指南 | #人生高性价比指南(72.4万) #程序员(683.0亿) #科普(11984.4亿) #职场(4214.8亿) #法律咨询(1688.0亿) | 2026-10-19 08:10 | 公开 / 内容由AI生成 / 双封面 | 定时已设置 | Ep11-清单.json |
+
 ## 首跑校准（重要）
 
 发布页 DOM 选择器是按 creator.douyin.com 已知结构编写的，抖音改版或细节出入时需要微调
@@ -235,6 +265,7 @@ douyin-publisher topics --manifest 清单.json --index 1
 - [x] v0.3 定时发布（清单 `publish_at` / `--at` 统一时间 / `--now` 强制立即）
 - [x] v0.4 发布设置可配置：可见范围 / 保存权限 / 自主声明（含无需声明）/ 合集，清单与 CLI 均可覆盖
 - [x] v0.6 话题热度筛选：实时查播放量，主题名 + pin 置顶，其余按 ≥1亿 选最热，点选绑定话题实体
+- [x] v0.7 发布记录：真发布后自动追加 Markdown + CSV（含话题热度、失败原因），`history` 命令查看
 - [x] **定位决策（2026-10-18）：不做 GUI**——工具的本质是浏览器自动化，"界面"就是发布页本身；
       人的参与收敛为清单审阅 + 批次批准，属于 Agent 对话与文件，不属于图形界面（推荐路径 = Agent 接管）
 - [ ] 整系列批量：扫描目录自动匹配 1.5x 成片 + 双封面 + 从调研材料抽正文

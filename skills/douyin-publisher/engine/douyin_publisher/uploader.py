@@ -580,6 +580,7 @@ def publish_one(ctx, item, idx, execute, interactive=True):
     has_title_input = fill_title(page, title)
 
     chosen, bind = tags, False
+    topic_details = []
     if item.get("topics"):
         try:
             plan = topics.resolve(
@@ -588,6 +589,7 @@ def publish_one(ctx, item, idx, execute, interactive=True):
             topics.print_plan(plan)
             if plan["api_ok"] and plan["names"]:
                 chosen, bind = plan["names"], True
+                topic_details = plan["pinned"] + plan["selected"]
             elif not plan["api_ok"]:
                 print("  [警告] 话题热度接口不可用，回退清单里的 #话题")
             else:
@@ -659,10 +661,10 @@ def publish_one(ctx, item, idx, execute, interactive=True):
                 break
         if ans == "q":
             page.close()
-            return {"status": "abort", "url": page.url, "topics": chosen}
+            return {"status": "abort", "url": page.url, "topics": chosen, "topic_details": topic_details}
         if ans == "s":
             page.close()
-            return {"status": "skip", "url": page.url, "topics": chosen}
+            return {"status": "skip", "url": page.url, "topics": chosen, "topic_details": topic_details}
 
     if execute:
         btn, _ = find_first(page, "publish_btn")
@@ -693,10 +695,12 @@ def publish_one(ctx, item, idx, execute, interactive=True):
         shot(page, f"published_{idx}")
         print(f"  发布{'成功' if ok else '结果未知（看截图）'}")
         page.close()
-        return {"status": "ok" if ok else "unknown", "url": page.url, "topics": chosen}
+        return {"status": "ok" if ok else "unknown", "url": page.url,
+                "topics": chosen, "topic_details": topic_details}
     else:
         page.close()
-        return {"status": "dryrun", "url": page.url, "topics": chosen}
+        return {"status": "dryrun", "url": page.url,
+                "topics": chosen, "topic_details": topic_details}
 
 
 # ---------------------------------------------------------------- 批量入口
