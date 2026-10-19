@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "meta": {
+    "series": "<系列名>",
+    "style": "<style-slug>-v1",
+    "styleName": "<风格中文名> v1",
+    "version": "1.0.0",
+    "updated": "<YYYY-MM-DD>",
+    "source": "系列风格总纲.md",
+    "note": "工程与封面脚本必须直接读本文件，禁止手抄色值/字号。任何改动同步更新版本号与系列风格总纲。"
+  },
+  "canvas": {
+    "w": 1920,
+    "h": 1080,
+    "fps": 24,
+    "margin": 96
+  },
+  "colors": {
+    "paper": {
+      "base": "#",
+      "deep": "#",
+      "edge": "#"
+    },
+    "ink": {
+      "primary": "#",
+      "secondary": "#",
+      "weak": "#"
+    },
+    "rule": {
+      "blue": "#",
+      "weak": "#"
+    },
+    "accent": {
+      "vermilion": "#",
+      "bright": "#",
+      "maxAreaRatio": 0.03
+    },
+    "highlight": {
+      "marker": "#",
+      "maxPerScene": 1
+    },
+    "forbidden": [
+      "glow",
+      "colorBoxShadow",
+      "gradientHighlight",
+      "pureBlack",
+      "pureWhite"
+    ]
+  },
+  "fonts": {
+    "numeric": {
+      "stack": ["<等宽字体>", "Consolas", "Noto Sans Mono CJK SC", "monospace"],
+      "usage": "所有年份/金额/百分比/编号，必须等宽"
+    },
+    "title": {
+      "stack": ["<标题字体>", "Noto Serif SC", "Songti SC", "SimSun", "serif"],
+      "usage": "每幕主题词、封面主标题、印章"
+    },
+    "body": {
+      "stack": ["<正文字体>", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "sans-serif"],
+      "usage": "正文、表格、字幕"
+    }
+  },
+  "typeScale": {
+    "kicker": { "size": 24, "font": "numeric", "color": "ink.weak" },
+    "docNo": { "size": 26, "font": "numeric", "color": "ink.secondary" },
+    "titleH2": { "size": 96, "font": "title", "weight": 700, "lineHeight": 1.05 },
+    "titleH3": { "size": 72, "font": "title", "weight": 700, "lineHeight": 1.08 },
+    "body": { "size": 34, "font": "body", "weight": 500, "lineHeight": 1.6 },
+    "table": { "size": 30, "font": "body", "weight": 500, "lineHeight": 1.5 },
+    "subtitle": { "size": 46, "font": "body", "weight": 500, "lineHeight": 1.4 },
+    "stamp": { "size": 40, "font": "title", "weight": 800 }
+  },
+  "layout": {
+    "headerBand": { "y": 0, "h": 96 },
+    "mainArea": { "y": 96, "h": 704 },
+    "subtitleBand": { "y": 812, "h": 88 },
+    "timeline": { "y": 940, "h": 60 },
+    "grid": { "columns": 12, "gutter": 24 },
+    "maxInfoBlocksPerScene": 3
+  },
+  "timeline": {
+    "label": "<母题带名称，如 40 年时间轴>",
+    "startYear": 1965,
+    "endYear": 2010,
+    "tickEveryYears": 5,
+    "lineColor": "rule.blue",
+    "tickColor": "rule.weak",
+    "activeColor": "accent.vermilion",
+    "activeBandMinWidth": 3,
+    "activeBandMaxWidth": 8,
+    "alwaysOnScreen": true,
+    "introDuration": 2.0,
+    "outroShowsCumulative": true
+  },
+  "texture": {
+    "fiberNoise": { "type": "feTurbulence", "baseFrequency": 0.8, "opacity": 0.055 },
+    "vignette": { "type": "radial", "color": "paper.edge", "opacity": 0.12 },
+    "crease": { "count": 2, "width": 1, "opacity": 0.05, "angleDeg": 2 }
+  },
+  "motion": {
+    "stamp": { "from": 1.18, "to": 1.0, "easing": "easeOutCubic", "duration": 0.18, "settle": 0.04 },
+    "typing": { "charsPerSecond": 20, "range": [18, 22], "cursor": "optional" },
+    "sticker": { "rotateFrom": 0.8, "rotateTo": 0.3, "offsetY": 12, "duration": 0.25 },
+    "paperSlide": { "offsetY": 24, "duration": 0.3, "shadow": true },
+    "sceneOut": { "offsetY": -8, "darken": 0.06 },
+    "forbidden": ["fadeIn", "flyIn", "bounce", "rotate360", "breathing"]
+  },
+  "subtitle": {
+    "position": "fixed",
+    "band": "subtitleBand",
+    "size": 46,
+    "font": "body",
+    "letterSpacing": "0.02em",
+    "reveal": ["typing", "stamp"],
+    "charsPerCue": { "min": 12, "max": 28, "preferred": [12, 24] },
+    "slotSeconds": { "min": 2.6, "max": 4.5 },
+    "speechRateCharsPerSec": 5.0,
+    "speechRateRange": [4.6, 5.5],
+    "quoteLimitRatio": 0.15,
+    "quoteAttributionTemplate": "<引自《<书名>》第{n}章>"
+  },
+  "voiceReady": {
+    "srt": {
+      "encoding": "UTF-8",
+      "bom": false,
+      "blankLineBetweenCues": 1,
+      "indexStart": 1,
+      "indexContinuous": true,
+      "sceneBoundaryMustAlignCue": true
+    },
+    "pipeline": {
+      "order": ["silent-master", "voiceover", "bgm"],
+      "note": "BGM 永远最后合：配音对齐会改变整片时长（实测 172.0s→198.9s），先合 BGM 等于把拍点算在作废的时间轴上",
+      "voiceProjects": ["<TTS 项目路径>", "<对齐/合成项目路径>"],
+      "alignStretchRange": [1.07, 1.28]
+    }
+  },
+  "cover": {
+    "primaryRatio": "3:4",
+    "primarySize": [1080, 1440],
+    "secondaryRatio": "4:3",
+    "secondarySize": [1920, 1440],
+    "backgroundStrategy": "<bright-paper-contrast / dark-field 等>",
+    "mustAvoid": ["<…>"],
+    "paperSameAsVideo": true,
+    "regions": {
+      "headerBand": [0, 0.08],
+      "dossierFace": [0.08, 0.52],
+      "titleBlock": [0.54, 0.74],
+      "subtitle": [0.78, 0.82],
+      "footerBand": [0.88, 0.96]
+    },
+    "requiredElements": ["<四件套>"],
+    "titleLines": { "count": 2, "charsPerLine": [4, 6], "font": "title", "weight": 800, "color": "ink.primary" },
+    "subtitleMaxChars": 16,
+    "stampChars": [2, 4],
+    "stampRotateDeg": 3,
+    "thumbnailCheckPx": [270, 360]
+  },
+  "signature": {
+    "seriesName": "<系列名>",
+    "footerLine": "<署名行>",
+    "episodeLabelTemplate": "EP.{nn} · {year} {chapterTitleShort}",
+    "nextEpisodeTeaserSeconds": 5
+  },
+  "sourcePolicy": {
+    "tiers": {
+      "A": { "label": "足够", "minCJK": 5000, "minHardNumbers": 8, "action": "不扩展" },
+      "B": { "label": "偏薄", "minCJK": 3000, "action": "定点补 1-2 处" },
+      "C": { "label": "不足或失效", "maxCJK": 3000, "action": "必须扩展并标注更新时间" }
+    },
+    "factKinds": {
+      "史实": "书与原始统计交叉；冲突以原始统计为准",
+      "数据": "必须回原始出处",
+      "作者主张": "必须用「作者认为」表述，不得讲成客观事实"
+    }
+  }
+}
