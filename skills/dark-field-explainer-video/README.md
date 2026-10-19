@@ -29,15 +29,20 @@ cp $SK/templates/video-template.html <项目>/<主题>/video.html
 # 2) 渲染前静态自检（必做）
 node $SK/scripts/precheck.js <项目>/<主题>/video.html 168
 
-# 3) 抽帧目检
-node ../handdrawn-explainer-video/scripts/render.js \
-  <项目>/<主题>/video.html tmp/probe --test "2,9,17,26,40"
+# 3) 关键帧视觉审查（必做，全量渲染的门禁）
+node ../handdrawn-explainer-video/scripts/keyframes.js \
+  <项目>/<主题>/video.html <项目>/<主题>/keyframes
+#    逐张 Read 审查帧（或先看 _联系表.jpg），改完重跑到干净，再签收：
+node ../handdrawn-explainer-video/scripts/keyframes.js \
+  <项目>/<主题>/video.html <项目>/<主题>/keyframes --approve "逐张看过"
 
-# 4) 全量渲染 + 编码
+# 4) 全量渲染 + 编码（无签收会被 render.js 拒绝）
 node ../handdrawn-explainer-video/scripts/render.js \
-  <项目>/<主题>/video.html <项目>/<主题>/frames --fps 30 --dur 168
-bash ../handdrawn-explainer-video/scripts/encode.sh \
-  <项目>/<主题>/frames 30 "<项目>/<主题>/<片名>.mp4" 8M
+  <项目>/<主题>/video.html <项目>/<主题>/frames --fps 30 --dur 168 --clean
+node ../handdrawn-explainer-video/scripts/encode.js \
+  <项目>/<主题>/frames 30 "<项目>/<主题>/<片名>.mp4" 8M     # 无 bash 用这个；有 bash 也可用 encode.sh
+node ../handdrawn-explainer-video/scripts/grab.js \
+  "<项目>/<主题>/<片名>.mp4" --acts --html <项目>/<主题>/video.html
 ```
 
 ---
@@ -61,7 +66,7 @@ bash ../handdrawn-explainer-video/scripts/encode.sh \
 
 | 资源 | 位置 |
 |---|---|
-| `render.js` / `encode.sh` | `../handdrawn-explainer-video/scripts/` |
+| `render.js` / `keyframes.js` / `encode.js` / `encode.sh` / `grab.js` | `../handdrawn-explainer-video/scripts/` |
 | `merge-audio.sh` | `<项目根>/scripts/` |
 | ffmpeg / ffprobe | `<项目根>/tools/` |
 

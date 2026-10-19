@@ -17,6 +17,8 @@
 - 🧒 **零门槛**：类比优先 + 大数字 + 每屏一句话，初中生也能看懂
 - 🪝 **钩子开场**：认知冲突式开头，让人想看下去
 - 🔎 **三层溯源**：research/ 原始来源留痕 → 调研材料（数据点附引用链接）→ 成片，每个数字都能回溯到出处
+- 🛡️ **关键帧视觉审查门禁**：按幕自动出帧（每幕 3 张 + 每幕字幕 1 张）、拼一张联系表、跑空白/越界/压条/非确定性机械体检；
+  逐张看过 `--approve` 签收（绑定工程指纹）后 `render.js` 才肯全量渲染，改了代码签收自动作废
 
 ## 📦 结构
 
@@ -33,8 +35,13 @@ handdrawn-explainer-video/
 │   ├── PatrickHand.ttf      # 英文/数字
 │   └── CaveatBold.ttf       # 英文标题
 └── scripts/
-    ├── render.js            # Playwright 逐帧渲染（自动探测 Chromium）
-    └── encode.sh            # ffmpeg 合成（编码器自动 fallback）
+    ├── precheck.js          # 静态自检（签名/时间轴/坐标误用/字幕表/确定性）
+    ├── keyframes.js         # 关键帧视觉审查：出帧 + 联系表 + 机械体检 + 签收/校验
+    ├── render.js            # Playwright 逐帧渲染（全量渲染前校验签收）
+    ├── encode.js            # 帧序列 → MP4（Node 版，Windows 无 bash 可用）
+    ├── encode.sh            # 同上（bash 版，Linux/macOS）
+    ├── grab.js              # 成片精确抽帧复核（--acts 每幕抽 1 张）
+    └── _browser.js / _review.js  # 上面几个脚本共用的浏览器探测与签收校验
 ```
 
 ## 📥 安装为 Skill
@@ -73,6 +80,7 @@ my-video/
 ├── research/            # 原始调研留痕（每条来源一个 md：URL+摘要+原文摘录；仅本地，不随项目分发）
 ├── 视频分镜脚本.md
 ├── video.html / scenes.js / framework.js / handdrawn.js
+├── keyframes/           # 关键帧审查（逐帧 + 联系表 + 审查表 + 签收记录）
 ├── frames/  testframes/ # 渲染中间产物，交付后可删
 └── my-video.mp4         # 成片
 ```
@@ -84,12 +92,17 @@ cp <skill>/templates/handdrawn.js <skill>/templates/framework.js <skill>/templat
 cp -r <skill>/assets .
 cp <skill>/templates/scenes_example.js scenes.js
 
-# 2. 自检关键帧（产物落 ./testframes/）
-node <skill>/scripts/render.js ./video.html ./testframes --test "3,8,24,58"
+# 2. 静态自检（退出码 0 才继续）
+node <skill>/scripts/precheck.js scenes.js handdrawn.js framework.js
 
-# 3. 全量渲染 + 合成（成片落主题文件夹内）
-node <skill>/scripts/render.js ./video.html ./frames --fps 24 --dur 170
-bash <skill>/scripts/encode.sh ./frames 24 ./my-video.mp4 4.5M
+# 3. 关键帧视觉审查：出帧 + 联系表 + 审查表 → 逐张 Read → 签收（必做）
+node <skill>/scripts/keyframes.js ./video.html ./keyframes
+node <skill>/scripts/keyframes.js ./video.html ./keyframes --approve "逐张看过，无错位"
+
+# 4. 全量渲染 + 合成（无签收会被 render.js 直接拒绝）
+node <skill>/scripts/render.js ./video.html ./frames --fps 24 --dur 170 --clean
+node <skill>/scripts/encode.js ./frames 24 ./my-video.mp4 4.5M      # 或 bash scripts/encode.sh …
+node <skill>/scripts/grab.js ./my-video.mp4 --acts --html ./video.html   # 成片抽帧复核
 ```
 
 详细制作规范（叙事骨架、钩子公式、场景模式库、踩坑备忘）见 [SKILL.md](SKILL.md)。
@@ -98,7 +111,8 @@ bash <skill>/scripts/encode.sh ./frames 24 ./my-video.mp4 4.5M
 
 ```
 主题/材料 ──调研──► 分镜脚本 ──JS+Canvas──► 确定性动画
-     → Playwright 逐帧截图（4080 帧）──ffmpeg──► 1080p24 MP4
+     → precheck 静态自检 → keyframes 关键帧审查+签收 → Playwright 逐帧截图（4080 帧）──ffmpeg──► 1080p24 MP4
+     → grab 成片抽帧复核    （画面没审过，渲染这一步会被门禁拦下）
 ```
 
 ## 📚 参考文献

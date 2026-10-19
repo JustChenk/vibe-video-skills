@@ -3,13 +3,13 @@ name: dark-field-explainer-video
 
 description: "把任意主题制作成「黑场发光字 + 数据可视化 + 粒子流场」风格的科技感动态图文科普短片（1080p MP4，JS + Canvas 逐帧渲染），又称 Opus5.5 风（该风格由 Claude Opus 5.5 主导设计）。风格接近参考片《「我爱你」说到第 1000 遍，信息量几乎为零》：近纯黑底 + 单层颗粒 + 橙红发光强调色 + 衬线大标题 + 极简数据图 + 长黑场转场。当用户要求做'科技感视频/高级感图文视频/暗色系解说视频/数据可视化视频/黑底金字那种风格的视频/Opus5.5 风/opus5.5风格'，或给出一个偏思辨、可量化的主题并要求用这种视觉语言呈现时使用。区别于 handdrawn-explainer-video（纸面手绘卡通）。关键词：科技感视频、暗场、发光字、数据可视化、粒子流场、动态图文、黑底科普、Opus5.5 风"
 
-version: "1.2.1"
+version: "1.3.0"
 
 author: "CodeBuddy AI"
 
 created: "2026-10-14"
 
-changelog: "1.0.0 首个版本。源自对参考片《「我爱你」说到第 1000 遍，信息量几乎为零》的抽帧逆向：固化「黑场 + 发光字 + 数据可视化 + 粒子流场」的视觉规格（references/style-spec.md）、六种分幕套路（references/scene-patterns.md）、可直跑的工程模板（templates/video-template.html）与渲染前静态自检 scripts/precheck.js。渲染管线复用 handdrawn-explainer-video 的 render.js / encode.sh，不重复实现。1.1.0 依 159s 实产成片与参考片的差距复盘：新增「三层结构语法」硬纪律（每幕 ≥2 层，杜绝纯黑底孤立文字的空洞幕）、数据可视化组件库（点阵网格 / 微光条目卡）、「大字压场渐晕」可读性手法与新幕式「档案墙幕」，并加入别名「Opus5.5 风」（该风格由 Claude Opus 5.5 主导设计）。1.2.0 依 Ep01 实战返工沉淀：precheck 新增 GLOW_NO_COLOR 静态检查（glow-r/glow-w 元素的 class 链缺显式 color 会渲染成黑字橙晕伪发光，渲染前无法目视发现），production-notes 补坑 2.7 与「定位四件套（left/top/size/color）」写法定式。1.2.1 补坑 2.8「渲染/编码赛跑」：重渲不清空 frames/ + 编码与渲染并行会让成片幕序错乱且错位不单调（ffprobe 完全正常，极难诊断），固化三条纪律——重渲先删整个 frames/、渲染编码严格串行、编码前验帧数与 mtime 单簇。"
+changelog: "1.3.0 渲染管线接入关键帧视觉审查门禁（与手绘风共用 handdrawn-explainer-video 新增的 keyframes.js）：阶段 5 从「抽帧目检」升级为「按幕自动出帧 + 联系表 + 机械体检 + 逐张看过后签收」，render.js 全量渲染前校验签收（改任何 js/html 签收即作废）；编码改用 Node 版 encode.js（无 bash 可用，第 4 参数即码率，暗场仍建议 8M）并加 --clean；新增 grab.js --acts 成片每幕抽帧复核。1.2.1 补坑 2.8「渲染/编码赛跑」：重渲不清空 frames/ + 编码与渲染并行会让成片幕序错乱且错位不单调（ffprobe 完全正常，极难诊断），固化三条纪律——重渲先删整个 frames/、渲染编码严格串行、编码前验帧数与 mtime 单簇。 1.2.0 依 Ep01 实战返工沉淀：precheck 新增 GLOW_NO_COLOR 静态检查（glow-r/glow-w 元素的 class 链缺显式 color 会渲染成黑字橙晕伪发光，渲染前无法目视发现），production-notes 补坑 2.7 与「定位四件套（left/top/size/color）」写法定式。1.1.0 依 159s 实产成片与参考片的差距复盘：新增「三层结构语法」硬纪律（每幕 ≥2 层，杜绝纯黑底孤立文字的空洞幕）、数据可视化组件库（点阵网格 / 微光条目卡）、「大字压场渐晕」可读性手法与新幕式「档案墙幕」，并加入别名「Opus5.5 风」（该风格由 Claude Opus 5.5 主导设计）。1.0.0 首个版本。源自对参考片《「我爱你」说到第 1000 遍，信息量几乎为零》的抽帧逆向：固化「黑场 + 发光字 + 数据可视化 + 粒子流场」的视觉规格（references/style-spec.md）、六种分幕套路（references/scene-patterns.md）、可直跑的工程模板（templates/video-template.html）与渲染前静态自检 scripts/precheck.js。渲染管线复用 handdrawn-explainer-video 的 render.js / encode.sh，不重复实现。"
 ---
 
 # 暗场发光图文视频生成器（Dark-Field Explainer Video）
@@ -100,18 +100,27 @@ node <skill>/scripts/precheck.js <项目>/video.html [渲染时长秒]
 ```
 专治三类事故：`--test` 抽多个时间点却得到同一画面（rAF 抢帧）、幕时长改了但渲染 `--dur` 没改、引用了外链资源导致离线渲染失败。
 
-### 阶段 5 · 抽帧目检
+### 阶段 5 · 关键帧视觉审查（**强制门禁，先审再渲**）
 ```bash
-node .../render.js <项目>/video.html tmp/probe --test "2,9,17,26,40"
+node ../handdrawn-explainer-video/scripts/keyframes.js <项目>/video.html <项目>/keyframes
+# → 每幕自动取 20%/55%/90% 各一帧 + 联系表 _联系表.jpg + 审查表 _关键帧审查.video.md
+# → 逐张 Read（或先看联系表再放大可疑幕），重点看：发光字有没有变成描边、每幕是否 ≥2 层、
+#   强调色是否滥用、有没有纯黑底孤立文字幕
+node ../handdrawn-explainer-video/scripts/keyframes.js <项目>/video.html <项目>/keyframes --approve "逐张看过"
 ```
-用**肉眼**，对着 §2 的八条逐帧检查：是不是太满、强调色是不是滥用了、发光是不是变成描边了、每幕是否 ≥2 层（有没有纯黑底孤立文字幕）。
+这版脚本与手绘风共用，按 `TIMELINE` 算幕边界、按暗场底色算"非底色占比"，
+一样会拦空白幕 / 越界溢墨 / 压进度条 / 非确定性。**没有有效签收，全量渲染会被 render.js 拒绝。**
+
+（`render.js --test "2,9,17"` 仍然可以用来看某几个时间点，但它只出你点名的那几张、没有签收，
+不能替代这一步——暗场尤其容易"抽到的都是正常幕，漏掉那个空洞幕"。）
 
 ### 阶段 6 · 全量渲染 + 编码
 ```bash
-node .../render.js <项目>/video.html <项目>/frames --fps 30 --dur <总时长>
-bash .../encode.sh <项目>/frames 30 "<项目>/<片名>.mp4" 8M
+node .../render.js <项目>/video.html <项目>/frames --fps 30 --dur <总时长> --clean
+node .../encode.js <项目>/frames 30 "<项目>/<片名>.mp4" 8M    # 或 bash .../encode.sh …
 ```
-> 这类画面建议 **`-b:v 8M`**：大面积近黑场景在低码率下会出现色带（banding）。
+> 这类画面建议 **`-b:v 8M`**：大面积近黑场景在低码率下会出现色带（banding）。`encode.js` 的第 4 个参数就是码率。
+> 编码后用 `node .../grab.js "<成片>" --acts --html <项目>/video.html` 铺一遍每幕，和审查帧比对。
 
 ### 阶段 7 · 交付
 如需配乐/配音：`bash scripts/merge-audio.sh -a assets/xx.mp3 <视频>`。
@@ -149,10 +158,12 @@ window.renderFrame = t => { window.__hostDriven = true; frame(t); };
 
 | 资源 | 位置 | 说明 |
 |---|---|---|
-| `render.js` | `../handdrawn-explainer-video/scripts/render.js` | 逐帧渲染（playwright-core + Chromium） |
-| `encode.sh` | `../handdrawn-explainer-video/scripts/encode.sh` | 帧序列 → MP4 |
+| `render.js` | `../handdrawn-explainer-video/scripts/render.js` | 逐帧渲染（playwright-core + Chromium）；全量渲染前校验关键帧签收 |
+| `keyframes.js` | `../handdrawn-explainer-video/scripts/keyframes.js` | 关键帧视觉审查 + 机械体检 + 签收（暗场同样适用） |
+| `encode.js` / `encode.sh` | `../handdrawn-explainer-video/scripts/` | 帧序列 → MP4（无 bash 用 .js，两版探测/fallback 一致） |
+| `grab.js` | `../handdrawn-explainer-video/scripts/grab.js` | 成片精确抽帧复核（`--acts` 每幕 1 张） |
 | `merge-audio.sh` | `<项目根>/scripts/merge-audio.sh` | 混音/变速（配乐版规则） |
-| ffmpeg/ffprobe | `<项目根>/tools/` | `encode.sh` 自动向上探测 |
+| ffmpeg/ffprobe | `<项目根>/tools/` | `encode.js` / `encode.sh` 自动向上探测 |
 
 运行时：**Node ≥ 18**、`playwright-core`、本机 Chromium、ffmpeg。安装说明见 `../handdrawn-explainer-video/SKILL.md` §安装。
 

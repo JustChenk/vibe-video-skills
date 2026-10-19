@@ -268,6 +268,148 @@ console.log('— 检查场景时间基准（全局 t 约定）');
   }
 }
 
+/* =========================================================
+   5. 局部坐标 vs 页面绝对坐标（2026-10-19 实战 bug）
+      在 ctx.translate/scale 的块里画【页面级】元素（circled 强调圈、banner 横幅、
+      chapterTitle 章节贴纸），坐标会被再平移一次 → 元素飞到画面角落，与它要标注
+      的东西完全分离。反向同理：块内本该用局部坐标的文字被写成页面坐标。
+      判据：translate 块内出现大坐标（超过画布 1/6 的裸数字），几乎必是绝对坐标写进局部系。
+   ========================================================= */
+console.log('— 检查局部坐标块内的页面级坐标');
+{
+  const sSrc = readF(SCENES);
+  const PAGE_LEVEL = ['circled', 'banner', 'chapterTitle'];   /* 语义上就在页面上画的组件 */
+  if (sSrc) {
+    /* 以 ctx.translate 为一个坐标系块的起点（scale 不移动原点，不作为起点） */
+    const openRe = /ctx\.translate\s*\(/g;
+    let om;
+    while ((om = openRe.exec(sSrc))) {
+      const callIdx = sSrc.indexOf('(', om.index);
+      const inner = matchCall(sSrc, callIdx);
+      if (inner === null) continue;
+      const after = sSrc.indexOf('\n', callIdx + inner.length + 1);
+      const ln = lineOf(sSrc, om.index);
+      /* 找这一句所在行的语句块：从该分号起到下一个不含 save/restore 的层级结束 —— 
+         实用近似：看同一函数体内后续若干行，直到出现未配对的 ctx.restore() */
+      const segStart = after < 0 ? om.index : after;
+      const segEnd = (() => {
+        let depth = 0; let i = segStart;
+        const re2 = /ctx\.(save|restore)\s*\(/g; re2.lastIndex = segStart;
+        let m2;
+        while ((m2 = re2.exec(sSrc))) {
+          if (m2[1] === 'save') depth++;
+          else { if (depth === 0) return m2.index; depth--; }
+          if (m2.index - segStart > 4000) break;
+        }
+        return Math.min(sSrc.length, segStart + 4000);
+      })();
+      const block = sSrc.slice(segStart, segEnd);
+
+      /* (a) 页面级组件被写进局部坐标系 */
+      for (const fn of PAGE_LEVEL) {
+        const re3 = new RegExp(`(?<![\\w$.])${fn}\\s*\\(`, 'g');
+        let m3;
+        while ((m3 = re3.exec(block))) {
+          const args = matchCall(block, block.indexOf('(', m3.index)) || '';
+          const nums = [...args.matchAll(/(?<![\w.])(\d{3,4})(?:\.\d+)?/g)].map(x => parseFloat(x[1]));
+          if (nums.some(n => n > 300)) {
+            err(SCENES, lineOf(sSrc, segStart + m3.index),
+              `${fn}() 写在 ctx.translate/scale 块内，且参数是页面级大坐标（${nums.filter(n => n > 300).join(', ')}）。` +
+              `该函数的坐标会被再次平移 → 元素会飞离应在位置（实战典型：强调红圈跑到画面右下角）。` +
+              `\n          改法：把 ${fn}() 移到 ctx.restore() 之后，用页面绝对坐标画。`);
+          }
+        }
+      }
+
+      /* (b) 块内 handText 用页面坐标画字（x/y 同时是大数） */
+      const re4 = /(?<![\w$.])handText\s*\(/g;
+      let m4;
+      while ((m4 = re4.exec(block))) {
+        const args = splitTop(matchCall(block, block.indexOf('(', m4.index)) || '');
+        const x = parseFloat(args[2]), y = parseFloat(args[3]);
+        if (Number.isFinite(x) && Number.isFinite(y) && (Math.abs(x) > 380 || Math.abs(y) > 380)) {
+          warn(SCENES, lineOf(sSrc, segStart + m4.index),
+            `handText() 在 translate 块内用了页面级坐标 (${x}, ${y})，文字会被平移出预期位置；` +
+            `块内应写局部坐标（相对平移原点）。`);
+        }
+      }
+    }
+  }
+}
+
+/* =========================================================
+   6. 字幕表自检（framework.js 的 CAPTIONS_LIST）
+      字幕重叠 / 超出总时长 / 单条过长 是"字幕版"返工的重灾区，
+      而且肉眼很难在成片里发现，必须静态拦。
+   ========================================================= */
+console.log('— 检查字幕表 CAPTIONS_LIST');
+{
+  const fSrc = readF(FRAME);
+  if (fSrc) {
+    const block = fSrc.match(/CAPTIONS_LIST\s*=\s*\[([\s\S]*?)\];/);
+    if (!block) {
+      console.log('  未使用字幕表（跳过）');
+    } else {
+      const items = [...block[1].matchAll(/\[\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*'((?:[^'\\]|\\.)*)'\s*\]/g)]
+        .map(m => ({ a: parseFloat(m[1]), b: parseFloat(m[2]), txt: m[3] }));
+      const fLn = lineOf(fSrc, block.index);
+      console.log(`  ${items.length} 条字幕`);
+      if (!items.length) err(FRAME, fLn, 'CAPTIONS_LIST 里一条都没解析出来');
+      /* 总时长（SCENES 或 __meta） */
+      let total = null;
+      const sb = fSrc.match(/const\s+SCENES\s*=\s*\[([\s\S]*?)\];/);
+      if (sb) {
+        for (const m of sb[1].matchAll(/start:\s*([\d.]+)\s*,\s*dur:\s*([\d.]+)/g)) {
+          total = Math.max(total || 0, parseFloat(m[1]) + parseFloat(m[2]));
+        }
+      }
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it.b <= it.a) err(FRAME, fLn, `字幕 #${i + 1} 结束时间 ${it.b} 不晚于开始时间 ${it.a}`);
+        const dur = it.b - it.a;
+        if (dur < 1.2) warn(FRAME, fLn, `字幕 #${i + 1}「${it.txt}」只停留 ${dur.toFixed(2)}s，来不及读（建议 ≥1.5s）`);
+        if (dur > 6) warn(FRAME, fLn, `字幕 #${i + 1}「${it.txt}」停留 ${dur.toFixed(1)}s，可能太拖`);
+        /* 中文语速约 4.5 字/秒，超过 6 字/秒 读不完 */
+        const n = it.txt.replace(/\s/g, '').length;
+        if (n / dur > 6.5) warn(FRAME, fLn, `字幕 #${i + 1} 每秒 ${(n / dur).toFixed(1)} 字，太快（「${it.txt}」）`);
+        if (total && it.b > total + 0.05) err(FRAME, fLn, `字幕 #${i + 1} 结束于 ${it.b}s，超出总时长 ${total}s`);
+        if (i > 0 && it.a < items[i - 1].b - 0.01) {
+          err(FRAME, fLn, `字幕 #${i} 与 #${i + 1} 时间重叠（${items[i - 1].b} > ${it.a}），两条会同时显示` +
+            `\n          「${items[i - 1].txt}」 / 「${it.txt}」`);
+        }
+        /* 与前一条的间隔过大，观众会看到"字幕空档" */
+        if (i > 0 && it.a - items[i - 1].b > 1.2) {
+          warn(FRAME, fLn, `字幕 #${i} 与 #${i + 1} 之间有 ${(it.a - items[i - 1].b).toFixed(1)}s 空档`);
+        }
+      }
+      if (total) console.log(`  总时长 ${total}s，末条结束 ${items.length ? items[items.length - 1].b : '-'}s`);
+    }
+  }
+}
+
+/* =========================================================
+   7. 确定性：渲染路径里不许出现 Math.random / Date.now / performance.now
+      （逐帧录制会闪、抽帧与全量渲染对不上）
+   ========================================================= */
+console.log('— 检查渲染路径的确定性');
+{
+  for (const [label, f] of [[SCENES, SCENES], [FRAME, FRAME]]) {
+    const src = readF(f);
+    if (!src) continue;
+    const lines = src.split('\n');
+    lines.forEach((line, i) => {
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;              /* 注释不算 */
+      if (/\bMath\.random\s*\(/.test(line)) {
+        err(f, i + 1, `渲染路径里出现 Math.random() → 逐帧录制会闪烁、抽帧与成片对不上。用 seed 驱动（RNG(seed)）`);
+      }
+      if (/\b(?:Date\.now|performance\.now)\s*\(/.test(line)) {
+        /* 只允许用于"是否启用实时预览"这类非渲染判定；出现在绘制函数体里才报 */
+        warn(f, i + 1, `出现 Date.now()/performance.now()，确认它不在绘制函数里（渲染路径必须纯函数）`);
+      }
+    });
+  }
+}
+
 /* ---------- 汇总 ---------- */
 console.log('');
 for (const w of warns) console.log(w);

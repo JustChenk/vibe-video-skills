@@ -3,13 +3,13 @@ name: handdrawn-explainer-video
   
 description: "把任意主题制作成 3 分钟以内的手绘卡通风格科普教学短片（JS + Canvas 逐帧渲染成 1080p MP4，无配音）。当用户要求'做个教学视频/科普短片/手绘动画视频/讲解视频'，或给出一个主题、文章链接希望生成讲解视频时使用。关键词：教学视频、科普视频、手绘动画、科普短片、Canvas 动画、讲解视频"
   
-version: "1.5.0"
+version: "1.6.0"
   
 author: "CodeBuddy AI"
   
 created: "2026-10-10"
   
-changelog: "1.5.0 迁入 vibe-video-skills 合集仓库（位于 skills/handdrawn-explainer-video/）：安装说明改为「clone 合集 + 链接 skill 目录」两种方式，补充同仓库另两个 skill（series-video-planner / douyin-cover-generator）的串联关系；本 skill 制作流程无功能变更。 1.4.0 新增 scripts/precheck.js 渲染前静态自检（用函数真实签名校验所有调用点，专治参数错位/漏参/时间基准错误，--dump 可打印参数绑定）；阶段 4 强制先跑 precheck；阶段 3 增加『API 签名速查表』与签名纪律；技术备忘新增第 7 条（参数错位类 bug 的成因与防护）。 1.3.1 阶段 3 字体引入支持 junction 零复制共享（Windows 推荐）或 copy 自包含二选一；技术备忘补充 rationale 与实测结论。 1.3.0 阶段 0 新增 research/ 原始调研留痕（每条来源一个 md：URL+摘要+原文摘录），调研材料数据点附引用链接，形成 成片→调研材料→原始来源 三层溯源链。 1.2.0 恢复『安装』章节(通用表述)、README 作品演示与参考文献；纳入 Git API 推送脚本与经验手册。 1.1.0 所有产物统一收纳到 <项目根>/<主题文件夹>/；路径去掉 /workspace 等 Linux 假设"  
+changelog: "1.6.0 关键帧视觉审查门禁（源自《AI 逆向一切》两次返工的教训）：新增 scripts/keyframes.js（按幕+字幕自动选点出帧、联系表、空白/越界/压条/非确定性机械体检、逐张看过后 --approve 签收、签收绑定工程指纹）与 scripts/_review.js / _browser.js；render.js 全量渲染前强制校验签收（无签收/工程改过/帧被删一律拒绝，仅 --allow-unreviewed 显式跳过），新增 --clean、--review-dir，自检帧明确不当作审查证据；precheck.js 新增局部坐标误用（translate 块里画 circled/banner/chapterTitle）、字幕表时间轴与语速、渲染确定性三类检查；新增 Windows 可用的 scripts/encode.js（编码前验帧连续性+mtime、编码后校验帧数/yuv420p/音轨）与 scripts/grab.js（精确抽帧、--acts 每幕抽帧）；阶段 4 重写为「静态自检 → 关键帧审查签收」，阶段 5 加前置条件与双版本纪律；技术备忘 8 补双向坐标坑、新增 9~14（审查门禁成因、测试帧不可当证据、双版本同源同批、编码前验帧、Windows 别凑 bash、中文源码勿用管道批量替换）；产物目录新增 keyframes/。 1.5.0 迁入 vibe-video-skills 合集仓库（位于 skills/handdrawn-explainer-video/）：安装说明改为「clone 合集 + 链接 skill 目录」两种方式，补充同仓库另两个 skill（series-video-planner / douyin-cover-generator）的串联关系；本 skill 制作流程无功能变更。 1.4.0 新增 scripts/precheck.js 渲染前静态自检（用函数真实签名校验所有调用点，专治参数错位/漏参/时间基准错误，--dump 可打印参数绑定）；阶段 4 强制先跑 precheck；阶段 3 增加『API 签名速查表』与签名纪律；技术备忘新增第 7 条（参数错位类 bug 的成因与防护）。 1.3.1 阶段 3 字体引入支持 junction 零复制共享（Windows 推荐）或 copy 自包含二选一；技术备忘补充 rationale 与实测结论。 1.3.0 阶段 0 新增 research/ 原始调研留痕（每条来源一个 md：URL+摘要+原文摘录），调研材料数据点附引用链接，形成 成片→调研材料→原始来源 三层溯源链。 1.2.0 恢复『安装』章节(通用表述)、README 作品演示与参考文献；纳入 Git API 推送脚本与经验手册。 1.1.0 所有产物统一收纳到 <项目根>/<主题文件夹>/；路径去掉 /workspace 等 Linux 假设"  
 ---
 
 # 手绘卡通教学视频生成器
@@ -78,14 +78,16 @@ cd ~/.codebuddy/skills/vibe-video-skills && git sparse-checkout set skills/handd
 ├── video.html                  # 动画工程（互动预览版）
 ├── scenes.js / framework.js / handdrawn.js
 ├── assets/fonts/*.ttf          # 手写字体（真实 copy 或指向 <skill>/assets 的 junction）
-├── testframes/                 # 阶段 4 自检测试帧（交付后可删）
+├── keyframes/                  # 阶段 4 关键帧视觉审查（逐帧 + 联系表 + 审查表 + 签收记录，出片后可删）
+├── testframes/                 # 阶段 4 抽帧速览（交付后可删）
 ├── frames/                     # 阶段 5 全量帧（体积大，合成后可删）
 └── <片名>.mp4                  # 阶段 5 成片
 ```
 
 - **开工第一步就创建该文件夹**，此后调研材料、research/、分镜、工程、帧、成片全部写在其内，禁止散落到项目根目录、tmp/ 或其他位置
 - 下文所有命令中的 `<主题文件夹>` 均指此目录；`<项目根>` 为当前工作目录
-- frames/ 与 testframes/ 是中间产物，交付确认后提醒用户可删（一部 170s 视频的 frames 约 1-2 GB）
+- frames/ 、testframes/ 、keyframes/ 是中间产物，交付确认后提醒用户可删（一部 170s 视频的 frames 约 1-2 GB）。
+  注意：**删掉 keyframes/ 等于作废旧签收**，以后想重渲必须先重新出帧审查（这是刻意的设计，别图省事删它）。
 - research/ 是溯源用的工作留痕，**仅本地保留，不随项目分发**（原文摘录有版权风险）；公开仓库的参考文献在 README 单独维护
 
 ## When to Use
@@ -105,7 +107,11 @@ cd ~/.codebuddy/skills/vibe-video-skills && git sparse-checkout set skills/handd
 | 5 | **材料不足主动搜索**  | 用户给的材料不够撑起 3 分钟叙事时，必须 WebSearch 补充调研，交叉验证事实             |
 | 6 | **方向不明先沟通**   | 主题模糊/材料不足/有多种切入角度时，先用 AskUserQuestion 与用户确认，并给出 2-4 个选项 |
 
-## 工作流（6 个阶段）
+## 工作流（7 个阶段）
+
+```
+调研 → 分镜 → 动画 → ①静态自检 → ②关键帧视觉审查（签收）→ ③全量渲染 + 合成 + 成片复核 → 交付
+```
 
 ### 阶段 0 · 素材解析与调研（必须做透）
 
@@ -233,9 +239,13 @@ cp <skill>/templates/scenes_example.js scenes.js   # 作为改写起点
 - *卡片幕*：3 张竖卡横排依次弹出（并列要点/方案对比）
 - *金句幕*：居中大字 + 红色描画下划线 + 小元素呼应开头
 
-### 阶段 4 · 自检（不可跳过）
+### 阶段 4 · 自检（不可跳过）—— 静态查错 → **关键帧视觉审查签收** → 才允许全量渲染
 
-**第 1 步（必做）：静态自检 —— 渲染之前先跑，能省掉一整轮返工**
+> **这一阶段有硬门禁。** 2026-10-19《AI 逆向一切》两次返工的直接原因就是：静态脚本全绿、随手抽两个时间点看过，
+> 就开全量渲染，结果红圈飞到画面右下角、箭头端点啃进卡片——只有把每一幕的帧**当图片看**才发现。
+> 于是本 skill 把"审过图"固化成签收记录，`render.js` 全量渲染前会校验它。
+
+#### 第 1 步（必做）：静态自检
 
 ```bash
 cd <主题文件夹>
@@ -244,12 +254,15 @@ node <skill>/scripts/precheck.js scenes.js handdrawn.js framework.js
 # "画面上凭空多个数字 / 某段文字消失"的形式混进成片，肉眼极易误判成设计元素
 ```
 
-`precheck.js` 检查四件事（用**函数真实签名**校验，不硬编码）：
+`precheck.js` 检查这些事（用**函数真实签名**校验，不硬编码）：
 
 1. **参数错位**：数值位传了字符串（如漏传 `badge` 的 `s`，`'卖方'` 落到缩放位）、文本位传了数字（seed 被画成文字）——**这一类就是历史高频 bug**
 2. **参数个数**：少于必填参数个数
 3. `SCENES` 时间轴连续性、`sceneN` 是否都有定义、总时长是否 ≤180s
 4. **时间基准**：场景函数是否误用了幕内相对时间（该幕会整段空白）
+5. **局部坐标 vs 页面坐标**（新增）：在 `ctx.translate` 块里调用 `circled / banner / chapterTitle` 且传页面级大坐标 → 元素会被再平移一次飞走（实战：红圈跑到右下角）；块内 `handText` 用页面坐标画字 → WARN
+6. **字幕表自检**（新增）：`CAPTIONS_LIST` 时间重叠、超出总时长、单条停留 <1.2s、语速 >6.5 字/秒、空档过长
+7. **确定性**（新增）：渲染路径里出现 `Math.random()` → ERROR（逐帧录制会闪、抽帧与成片对不上）
 
 排查单个函数时用 `--dump` 看参数绑定：
 
@@ -258,7 +271,49 @@ node <skill>/scripts/precheck.js scenes.js handdrawn.js framework.js --dump badg
 # 打印每个 badge() 调用点，逐参数显示"形参名 <= 实参"
 ```
 
-**第 2 步：渲染测试帧并逐张 Read**
+#### 第 2 步（必做）：关键帧视觉审查 —— 出图 → **逐张看** → 签收
+
+```bash
+cd <主题文件夹>
+# ① 自动选点出图（每幕 3 张 + 每条字幕入场后 1 张，双版本工程各跑各的）
+node <skill>/scripts/keyframes.js ./video.html ./keyframes --srt ./<字幕>.srt
+#    产物：keyframes/kf_<秒>s.jpg（逐帧）、keyframes/_联系表.jpg（一张图看全片）、
+#          keyframes/_关键帧审查.video.md（审查表，含机械体检结论）
+```
+
+`keyframes.js` 做的事：
+
+- **自动选点**：按 `SCENES`/`TIMELINE` 的幕边界，每幕取 `20% / 55% / 90%`（避开 wipe 转场窗口）；
+  有 SRT 时按每条字幕入场后 0.6s 补帧 —— **每一幕都被覆盖**，不靠人拍脑袋挑时间点。
+- **机械体检**（拦的是硬伤，不是审美）：空白幕（非底色 <0.6%）、画面被填满、画面最外 8px 有内容（出界/裁切）、
+  左右安全区外有内容、底部进度条被压、**同一 t 连渲两次不一致（非确定性）**。
+- **联系表**：把 30~40 张帧拼成一张长图，**先 Read 这一张**扫全片节奏，再对可疑幕放大看单帧。
+
+**然后必须逐张 Read 审查帧**（或先看联系表、再放大可疑项），检查清单：
+
+- [ ] 文字无重叠、无被遮挡、无超出卡片/屏幕边界
+- [ ] **画面上没有"看不懂的数字/字母"**——凡是无法解释其含义的数字（如凭空出现的 `304`），一律当 bug 追查
+- [ ] **每个本该有文字的元素都真的有字**：徽章、价签、卡片、贴纸逐个确认（文字消失也是错位的一种表现）
+- [ ] **标注类元素（红圈/箭头/下划线）确实指向它要标的东西**——飞到画面角落、啃进卡片、压在文字上，都算错
+- [ ] 同一张卡片里的图标与文字不重叠（图标宽度要按实际绘制范围留白，别只留 60px）
+- [ ] 无字体豆腐块（□）；每个场景的关键时间点都有内容（无意外空白帧）
+- [ ] 错别字、数字与调研材料一致；场景切换前后 1s 内画面不穿帮
+- [ ] 字幕版：字幕条不压主内容、不压进度条、不被大标题遮住
+
+发现问题改代码后，**回到第 1 步重跑 precheck、再重跑 keyframes.js**（帧会重新生成），直到干净。然后签收：
+
+```bash
+node <skill>/scripts/keyframes.js ./video.html ./keyframes --approve "逐张看过：8 幕 40 帧，无错位/无多余数字"
+# 签收记录 keyframes/_keyframe_review.video.json 里写死了工程指纹（html + js + 字体内容哈希）
+```
+
+> **签收 = 对这版画面负责。** 之后只要改任何一个 js/html，指纹就变，签收自动作废，
+> `render.js` 会拒绝全量渲染 —— 这是为了逼出"改了又没重看"这种最贵的返工。
+> 有机械 WARN 时可用 `--strict` 让签收也拒绝，直到 WARN 清完。
+
+#### 第 3 步（可选）：抽帧速览
+
+`render.js --test` 出的 `testframes/` 只适合**开发中途看问题**，**不能当审查证据**（它不覆盖每一幕，也没有签收机制）：
 
 ```bash
 cd <主题文件夹>   # 首次需先安装渲染依赖：PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm i playwright-core
@@ -266,33 +321,35 @@ node <skill>/scripts/render.js ./video.html ./testframes --test "3,8,24,58,80,11
 # 测试帧落在 <主题文件夹>/testframes/，Read 逐张检查
 ```
 
-**逐张 Read 检查每张测试帧**，检查清单：
-
-- [ ] 文字无重叠、无被遮挡、无超出卡片/屏幕边界
-- [ ] **画面上没有"看不懂的数字/字母"**——凡是无法解释其含义的数字（如凭空出现的 `304`），一律当 bug 追查，不要当成设计元素
-- [ ] **每个本该有文字的元素都真的有字**：徽章、价签、卡片、贴纸逐个确认（文字消失也是错位的一种表现，比多出数字更难发现）
-- [ ] 无字体豆腐块（□）—— 出现则检查 assets/fonts 是否就位、生僻字符（如缅文）换中文描述
-- [ ] 每个场景的关键时间点都有内容（无意外空白帧）
-- [ ] 错别字、数字与调研材料一致
-- [ ] 场景切换前后 1s 内画面不穿帮
-
-发现问题改代码后**先重跑 `precheck.js`，再重渲对应时间点验收**，直到全部通过。
-
-### 阶段 5 · 全量渲染与合成
+### 阶段 5 · 全量渲染与合成（**前置条件：阶段 4 已签收**）
 
 ```bash
 cd <主题文件夹>
 # 全量渲染（4080 帧约 3 分钟，建议 run_in_background）：
-node <skill>/scripts/render.js ./video.html ./frames --fps 24 --dur <总时长>
-# 合成（编码器自动 fallback: libx264 → libopenh264 → libsvtav1），成片写在主题文件夹内：
-bash <skill>/scripts/encode.sh ./frames 24 "./<片名>.mp4" 4.5M
-# 抽帧复核（产物 <主题文件夹>/check_%d.jpg）：
-ffmpeg -y -i "./<片名>.mp4" -vf "select='eq(n\,200)+eq(n\,1500)+eq(n\,3900)'" -vsync vfr check_%d.jpg
+# ⚠️ 这一步会被门禁拦住：没有有效的关键帧签收 → 直接拒绝渲染（见阶段 4 第 2 步）
+node <skill>/scripts/render.js ./video.html ./frames --fps 24 --dur <总时长> --clean
+#   --clean 先清空帧目录：防止上次的旧帧和新帧混在一起（补渲时最容易被坑）
+#   确需只补渲一小段（不推荐）：加 --allow-unreviewed 跳过门禁；补渲后仍要重跑 keyframes.js 并重新签收
+
+# 合成（Node 版，Windows 无 bash 也能跑；探测规则与 encode.sh 一致）：
+node <skill>/scripts/encode.js ./frames 24 "./<片名>.mp4" 4.5M
+#   Linux/macOS 有 bash 也可以用：bash <skill>/scripts/encode.sh ./frames 24 "./<片名>.mp4" 4.5M
+
+# 成片抽帧复核（每幕中段各抽 1 张 → grab/，再和 keyframes/ 的审查帧比对）：
+node <skill>/scripts/grab.js "./<片名>.mp4" --acts --html ./video.html
 ```
+
+`encode.js` 会在编码前验帧（帧号连续、无缺口、mtime 不跨天）并在编码后校验成片（帧数 / 分辨率 / `yuv420p` / 有无音轨）。
+
+**双版本工程（字幕版 + 无字幕版）的纪律**：
+
+1. 两版**必须同源、同批重渲**：改了一处画面就两版都重跑 `keyframes.js` → 都签收 → 都全量渲染，否则一版有修复一版没有。
+2. 签收是**按入口 html 名分开**的（`_keyframe_review.video.json` / `_keyframe_review.video_captions.json`），各有各的指纹。
+3. 帧目录要分别存在（`frames/` 与 `frames_captions/`）；补渲覆盖前先确认目标目录存在，否则一次覆盖失败会把整版废掉。
 
 ### 阶段 6 · 交付
 
-`present_files` 依次给出：`<主题文件夹>/<片名>.mp4` → video.html（互动预览版）→ 视频分镜脚本.md → 调研材料.md → 源码 js。总结里写清：时长/分辨率/每幕一句话/制作方式/如何修改复用；并提示 frames/、testframes/ 可删以释放空间。
+`present_files` 依次给出：`<主题文件夹>/<片名>.mp4` → video.html（互动预览版）→ 视频分镜脚本.md → 调研材料.md → 源码 js。总结里写清：时长/分辨率/每幕一句话/制作方式/如何修改复用；并提示 frames/、testframes/、keyframes/ 可删以释放空间（**但删了 keyframes/ 签收就作废，重新渲染要重新审**）。
 
 ## 技术备忘（已踩过的坑）
 
@@ -315,17 +372,36 @@ ffmpeg -y -i "./<片名>.mp4" -vf "select='eq(n\,200)+eq(n\,1500)+eq(n\,3900)'" 
    - 写完立刻跑 `node <skill>/scripts/precheck.js`（会校验调用点参数个数与位置类型，并覆盖项目自定义 helper）；
    - 自检阶段看到任何"无法解释含义的数字"，一律按 bug 追查，可用 `--dump <函数名>` 看参数绑定；
    - 自定义 helper 统一按 `(ctx, x, y, [数值...], txt, seed, o={})` 的次序写，文本紧跟数值、始终在 seed 之前。
-8. **局部坐标 vs 绝对坐标**：凡在 `ctx.translate/scale` 之后绘制的元素（价签、徽章、卡片内文字），传给 `handText` 的必须是**局部坐标**（`0,2`、`10,2` 这类）。混用绝对坐标会让文字跑到画面外或压在别的元素上。
+8. **局部坐标 vs 绝对坐标（两个方向都会踩）**：
+   - 方向一：凡在 `ctx.translate/scale` 之后绘制的元素（价签、徽章、卡片内文字），传给 `handText` 的必须是**局部坐标**（`0,2`、`10,2` 这类）。混用绝对坐标会让文字跑到画面外或压在别的元素上。
+   - 方向二：`circled`（强调圈）、`banner`（横幅）、`chapterTitle`（章节贴纸）语义上就是**页面级组件**，必须在 `ctx.restore()` **之后**用页面坐标调用；写进 translate 块里会被再平移一次 → 元素飞到画面右下角。实战：第 5 幕五步流水线的红圈整个飞到 (1750,750)，静态脚本全绿，只有看图才发现。`precheck.js` 已能静态拦这两类。
+
+9. **关键帧审查是硬门禁，不是走过场（2026-10-19 两次返工的教训）**：
+   - 事故链：静态 precheck 全绿 → 随手抽 2~3 个时间点看过 → 全量渲染 + 合成 → 人看片发现红圈错位 / 箭头锚点错 → 改代码 → 重渲 → 重编 → 双版本一起返工。
+   - 根因不是"没检查"，而是**检查点选得随意**：恰好看的那几张没覆盖出事的那一幕。
+   - 现在的纪律：`keyframes.js` 按幕自动选点（每幕 ≥3 张 + 每幕字幕 1 张）→ **逐张 Read** → `--approve` 签收（写入工程指纹）→ `render.js` 校验签收才肯全量渲染。改任何 js/html 指纹即变，签收自动作废，想跳过只能显式 `--allow-unreviewed`。
+
+10. **别拿"测试帧"当审查证据**：`render.js --test` 只出你点名的几个时间点，**不保证覆盖每一幕**，也没有签收与机械体检。它适合改代码时快速看一眼；出片前的审查必须走 `keyframes.js`。
+
+11. **双版本工程同源同批**：一套工程出「字幕版 + 无字幕版」时，任何画面修复都要两版一起重渲重编。历史教训：只补了无字幕版，字幕版还带着错位红圈；且补渲时若目标帧目录已被清空，`copy` 会抛几百行错而旧帧还在被后台渲染覆盖，最后只能整集重渲。
+
+12. **编码前验帧数**：`帧数 = 总时长 × fps`，且整批帧 mtime 应集中在一个时间簇（一次渲染出来的）。数字不对 / 跨天的旧帧混进来，会让幕序整体错乱，而 ffprobe 一切正常、极难诊断。`encode.js` 现在会自动检查并在失败时报错。
+
+13. **Windows 上别硬凑 bash**：没有 bash 时 `encode.sh` 跑不了，手敲 ffmpeg 容易漏 `-pix_fmt yuv420p` / `-movflags +faststart`。用 `node <skill>/scripts/encode.js`（探测与 fallback 逻辑与 sh 版一致）。同理抽帧别在 PowerShell 里拼 `"$T\vid_$t.jpg"`——`$t` 会被并进路径变成 `路径\97\...`，用 `grab.js`。
+
+14. **编辑含大量中文的源文件时，别用"读出来 → 正则替换 → 写回去"这种管道**（2026-10-19 亲身事故）：PowerShell 在无 BOM 的 UTF-8 文件上会按系统代码页（GBK）解码，再以 UTF-8 写回，**整个文件的中文变成乱码，引号被吃掉一半，JS 直接语法错误**。改中文源码一律用 `edit` 工具（按 UTF-8 精确替换）；必须用脚本批量改时，先 `[System.IO.File]::ReadAllText($p,[System.Text.Encoding]::UTF8)` 读、`WriteAllText($p,$t,(New-Object System.Text.UTF8Encoding($false)))` 写，并先备份。
 
 ## 验收清单（交付前逐项过）
 
-- [ ] **`node <skill>/scripts/precheck.js scenes.js handdrawn.js framework.js` 退出码为 0**（无参数错位/无时间轴断裂/无空白幕）
-- [ ] 测试帧逐张 Read 过，且**画面上的每个数字都能说清含义**、每个该有文字的元素都真的有字
+- [ ] **`node <skill>/scripts/precheck.js scenes.js handdrawn.js framework.js` 退出码为 0**（无参数错位/无时间轴断裂/无空白幕/无绝对坐标误用/字幕表无重叠）
+- [ ] **`keyframes.js` 出过审查帧，且逐张 Read 过**；`keyframes/_keyframe_review.<入口>.json` 的指纹与当前工程一致（`render.js` 门禁能放行）
+- [ ] **画面上的每个数字都能说清含义**；每个该有文字的元素都真的有字；红圈/箭头确有所指
 - [ ] 时长 ≤ 180s，24fps，1920×1080，H.264，yuv420p，faststart
 - [ ] 无任何音轨
 - [ ] 第 1 幕 15s 内有明确钩子
 - [ ] 每个专业概念都有类比解释；抽查一个初中生能复述大意
 - [ ] 关键数据与调研材料一致，无杜撰，且每个数据点都能沿 research/ 引用链回溯到原始来源
 - [ ] 结尾有金句且呼应开头
+- [ ] 双版本（如出）画面同源、都已重渲重编
 - [ ] 调研材料 md + 分镜脚本 md + 互动预览 html 一并交付
 - [ ] 所有产物都在 `<项目根>/<主题文件夹>/` 内，项目根目录无散落文件
