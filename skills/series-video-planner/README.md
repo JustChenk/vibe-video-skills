@@ -23,6 +23,7 @@
 series-video-planner/
 ├── SKILL.md                              # 8 步工作流完整手册
 ├── references/
+│   ├── presentation-rules.md             # 呈现原则（文字直接给 / 并列整组给 / 什么才做动效）
 │   ├── style-engine.md                   # 风格引擎三层结构（怎么用代码强制画风一致）
 │   ├── mentor-guide.md                   # 导师手册（派单六要素 + 四道闸门 + 打回清单）
 │   ├── case-study-linux-memory.md        # 技术长文类案例（Linux 内存管理 7 集）
@@ -36,6 +37,7 @@ series-video-planner/
 
 ## 版本
 
+- v2.2.0（2026-10-20）：新增 presentation-rules.md 呈现原则；硬性规则增至 12 条；新增「常见返工原因」表
 - v2.1.0（2026-10-20）：新增 Step 7「交付样板集」与 Step 8「导师模式」；新增 `style-engine.md`、`mentor-guide.md`、`集目录模板.md`；明确「只做总览 + 样板集」是完整交付形态
 - v2.0.0（2026-10-20）：新增 Step 2 风格总纲前置、资料分级扩展机制、voice-ready 字幕规范与声画链顺序；新增书籍类案例与两份模板
 - v1.x：拆分逻辑四原则 + 链接强度三档 + 双线制作模式
