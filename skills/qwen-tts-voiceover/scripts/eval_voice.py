@@ -132,7 +132,9 @@ def main():
     ap.add_argument("--ref", required=True)
     ap.add_argument("--text", default=None)
     ap.add_argument("--audio", default=None)
-    ap.add_argument("--batch", default=None, help="manifest.json 目录，批量评测")
+    ap.add_argument("--batch", default=None, help="align_report.json 或 manifest.json，批量评测")
+    ap.add_argument("--take-suffix", default=None,
+                    help="align_report 模式下 take/ 文件后缀（默认 qwen）")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -150,12 +152,23 @@ def main():
     if args.batch:
         man = json.loads(Path(args.batch).read_text(encoding="utf-8"))
         base = Path(args.batch).parent
-        for it in man["items"]:
-            # 兼容两种 manifest：synthesize_srt.py 用 idx，tts_cli.py 用 file
-            name = it.get("file") or f"cue_{it['idx']:03d}.wav"
-            p = base / name
-            if p.exists():
-                targets.append((p, it.get("text", ""), name))
+        if "cues" in man:
+            # tts_voiceover.py 的 align_report.json：cue 存在 take/{i:03d}_<engine>.wav
+            take = base / "take"
+            engine = args.take_suffix or "qwen"
+            for c in man["cues"]:
+                i = c.get("i", c.get("idx"))
+                cands = [take / f"{i:03d}_{engine}.wav", take / f"{i:03d}.wav"]
+                p = next((x for x in cands if x.exists()), None)
+                if p:
+                    targets.append((p, c.get("text", ""), p.name))
+        else:
+            # build/tts_cli 产出的 manifest：items[] 带 file 或 idx
+            for it in man["items"]:
+                name = it.get("file") or f"cue_{it['idx']:03d}.wav"
+                p = base / name
+                if p.exists():
+                    targets.append((p, it.get("text", ""), name))
     else:
         targets.append((Path(args.audio), args.text or "", Path(args.audio).name))
 

@@ -3,13 +3,13 @@ name: qwen-tts-voiceover
 
 description: "用本地 Qwen3-TTS（1.7B/0.6B Base）克隆指定音色，给 SRT 字幕稿逐句配音，并让字幕/画面/音频三者严格同步（三级对齐 + 时间轴重映射 + 重渲染）。当用户要求'用某个人的声音配音''克隆这个音色''给视频加配音''把音频抽出来仿这个说话人''SRT 转配音版视频'时使用。关键词：音色克隆、Qwen3-TTS、本地 TTS 配音、配音版、音画同步、字幕对齐、voice clone、音色替换"
 
-version: "1.0.0"
+version: "1.0.1"
 
 author: "CodeBuddy AI"
 
 created: "2026-10-20"
 
-changelog: "1.0.0 首版。沉淀自《AI 逆向一切》配音版实战（REA 视频 172s→179s 配音重建）与 tts_qwen 本地部署。核心内容：①Qwen3-TTS Base 的 ICL 音色克隆用法（参考音 + ref_text 双输入）；②参考音**干净收尾**铁律（末采样≈0，否则每句开头多出半个字，如「的是」）；③逐句合成的三道采样防线（token 封顶 / 截断判定 / **音色+F0 双校验**）；④SRT→voice.wav 的三级对齐（L1 句内变速 / L2 吞 gap / L3 幕级重排）与 voice_timeline.js 时间轴重映射；⑤全流程质量门禁与验收指标。重点 bug 记录见 references/production-notes.md §2.2（第 21 条英文专名句采样崩成男声：F0 320Hz→144Hz、cos 0.9202、并出现幻觉文本「中文字幕志愿者 李宗盛」的重复循环症状，而旧阈值 0.90 把它放行了）。"
+changelog: "1.0.1 补两条实战教训：①`eval_voice.py` 支持直接读 align_report.json（原来只认 manifest 的 items 键，按文档跑会 KeyError）；②新增 §3.5「被 Whisper 幻觉误导，差点改了没问题的字幕稿」——修复前评测输出把第 22 条转写成「请不吝点赞 订阅 转发 打赏支持明镜与点点栏目」（CER=1.000），曾被误判为 SRT 模板残留，实际是崩坏男声导致的 ASR 幻觉，原 SRT 内容正常；§2.9 相应升级为三实例对照，并明确「CER 接近 1.0 先查音频、ASR 只作一致性探测不作事实来源」。 1.0.0 首版。沉淀自《AI 逆向一切》配音版实战（REA 视频 172s→179s 配音重建）与 tts_qwen 本地部署。核心内容：①Qwen3-TTS Base 的 ICL 音色克隆用法（参考音 + ref_text 双输入）；②参考音**干净收尾**铁律（末采样≈0，否则每句开头多出半个字，如「的是」）；③逐句合成的三道采样防线（token 封顶 / 截断判定 / **音色+F0 双校验**）；④SRT→voice.wav 的三级对齐（L1 句内变速 / L2 吞 gap / L3 幕级重排）与 voice_timeline.js 时间轴重映射；⑤全流程质量门禁与验收指标。重点 bug 记录见 references/production-notes.md §2.2（第 21 条英文专名句采样崩成男声：F0 320Hz→144Hz、cos 0.9202、并出现幻觉文本「中文字幕志愿者 李宗盛」的重复循环症状，而旧阈值 0.90 把它放行了）。"
 ---
 
 # Qwen3-TTS 音色克隆配音 · 音画同步 SOP
