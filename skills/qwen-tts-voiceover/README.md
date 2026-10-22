@@ -1,7 +1,8 @@
 # qwen-tts-voiceover
 
 用**本地 Qwen3-TTS** 克隆指定音色，给 SRT 字幕稿逐句配音，
-并让**字幕 / 画面 / 音频三者严格同步**——包括时间轴重建与画面重渲染。
+产出**音画同步**的配音版成片——两条路线按工程能力二选一：
+**A 时间轴重映射 + 重渲染**（语音优先）｜**B fit-to-slot 零重渲染**（画面优先，并轨进无声母版）。
 
 > 纯本地推理，零 API 依赖。RTX 4060 Laptop 8GB 即可跑 1.7B。
 
@@ -14,10 +15,11 @@
 | 难点 | 本 skill 的做法 |
 |---|---|
 | **音色从哪来** | Qwen3-TTS Base 零样本克隆，3~10s 参考音即可 |
-| **时间怎么对齐** | 三级对齐（L1 句内变速 / L2 吞 gap / L3 幕级重排）+ 时间轴重映射 |
+| **时间怎么对齐** | 路线 A：三级对齐（L1 句内变速 / L2 吞 gap / L3 幕级重排）+ 时间轴重映射 + 重渲染；路线 B：fit-next 配音适配现有槽位，视频一帧不改 |
 
-> 换配音**不是**换一条音轨。配音时长和原字幕槽位天然不等，
-> 整条时间轴会变，画面必须重渲染。
+> 路线 A：换配音**不是**换一条音轨，整条时间轴会变，画面必须重渲染。
+> 路线 B：配音给画面让路，只在「会撞下一句」时提速；仅片尾语音溢出才延长视频（tpad 克隆末帧）。
+> 选型先跑预演（按 6.62 字/秒估撞句数）：撞句=0 → B；成规模 → A；工程无注入点 → 只能 B。
 
 ---
 
@@ -46,6 +48,25 @@ node render.js video_voice.html ./frames_voice --fps 24 --dur <新时长> \
 python scripts/build_dub_video.py ./frames_voice voicework/voice.wav 配音版.mp4
 python scripts/eval_voice.py --model 1.7b --qwen-dir ../tts_qwen \
   --ref assets/ref/ref_cand1.wav --batch voicework/align_report.json
+```
+
+**路线 B（零重渲染，批量补水/无注入点工程）**：
+
+```bash
+# 前三步同路线 A（参考音通常已存在，直接复用）
+# 4. fit-next 逐句合成：语音在「下一句起点-0.10s」与「槽位+1.5s」间自然走
+python scripts/synthesize_srt_fitnext.py --model 1.7b \
+  --ref-audio assets/ref/ref_cand1.wav --ref-text "$(cat assets/ref/ref_cand1.txt)" \
+  --srt assets/srt/epXX.srt --out-dir output/epXX --seed 20261019
+
+# 5. 并轨：视频流直拷；--voice-end 传 manifest 的 voice_end_sec（别用音轨全长，含 0.3s 垫尾）
+python scripts/merge_dub.py <无声母版.mp4> output/epXX/full_raw.wav \
+  <集目录>/<原名>_配音版.mp4 --voice-end <voice_end_sec>
+
+# 6. 验收（中文计数字幕稿看 adj_cer）
+python scripts/eval_voice.py --model 1.7b --qwen-dir ../tts_qwen \
+  --ref assets/ref/ref_cand1.wav --batch output/epXX/manifest.json --out output/epXX/eval.json
+python scripts/qa_report.py <配音目录>
 ```
 
 ---
@@ -94,10 +115,13 @@ python scripts/eval_voice.py --model 1.7b --qwen-dir ../tts_qwen \
 
 | 脚本 | 作用 |
 |---|---|
-| `scripts/tts_voiceover.py` | 主流程：逐句合成 + 三级对齐 + 时间轴注入 |
+| `scripts/tts_voiceover.py` | 路线 A 主流程：逐句合成 + 三级对齐 + 时间轴注入 |
+| `scripts/synthesize_srt_fitnext.py` | 路线 B 合成：fit-next 窗口逐句克隆 + 按 SRT 绝对时间拼整轨 |
+| `scripts/merge_dub.py` | 路线 B 并轨：视频流直拷 + aac；仅 speech 冲片尾才 tpad 延长 |
 | `scripts/pick_ref.py` | 参考音挑选：词边界滑窗 + 干净收尾 + 精确 ref_text |
 | `scripts/eval_voice.py` | 验收：cos / F0 / CER 逐句体检 |
-| `scripts/build_dub_video.py` | 帧序列 + 音轨 → 最终 MP4 |
+| `scripts/qa_report.py` | 汇总：manifest 指标 + 变速/裁切/超槽清单 + 中文计数归一化 adj_cer |
+| `scripts/build_dub_video.py` | 路线 A：帧序列 + 音轨 → 最终 MP4 |
 
 ---
 
@@ -107,11 +131,13 @@ python scripts/eval_voice.py --model 1.7b --qwen-dir ../tts_qwen \
 |---|---|---|
 | 显存 | ≈ 3.9 GB | ≈ 2.0 GB |
 | 生成速度 | RTF ≈ 0.5× | RTF ≈ 0.5× |
-| 50 句整篇（179s） | 12 min | 11 min |
-| 音色相似度 | 0.9756~0.9867 | 0.9660~0.9834 |
-| CER | 0.042 | 0.053 |
+| 50 句整篇（179s，路线 A） | 12 min | 11 min |
+| 37 句整篇（165s，路线 B） | ≈ 5 min | — |
+| 音色相似度 | 0.9756~0.9867（A）｜0.9667~0.9846（B） | 0.9660~0.9834 |
+| CER | 0.042~0.048（A）｜adj_cer 0.025~0.048（B，中文计数稿） | 0.053 |
 
-**推荐 1.7B**：错字约为 0.6B 的一半。
+**推荐 1.7B**：错字约为 0.6B 的一半。路线 B 单字误读基线约 5/37 条、集中在不常见词；
+中文计数字幕稿的 CER 必须看 `qa_report.py` 的 adj_cer（原值虚高一个量级，见 production-notes §5.3）。
 
 ---
 

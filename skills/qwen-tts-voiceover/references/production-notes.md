@@ -343,3 +343,92 @@ Ghidra 看程序，IDA、Hopper 看二进制，JADX 拆安卓包
 | 语速不可精确控制 | Base 模型无 instruct 能力，语速靠参考音携带 | 换参考音（选语速接近的片段），或 atempo 后处理 |
 | 音色相似度天花板 | 实测 0.97~0.99，不等于原人 | 这是零样本克隆的常态，不追满分 |
 | 8GB 显存 | 1.7B + Whisper 不能共存 | 分段执行 |
+
+---
+
+## 5. 路线 B 实战：《以日为鉴》17 集批量配音（2026-10-22~23）
+
+### 5.1 路线 B 的由来（用户口径，写进决策依据）
+
+REA（路线 A）把 172s 重建成 179s。轮到《以日为鉴》时，工程是「旧档案室」风格
+（archive.js），**没有 `__TIME_REMAP` 注入点**，路线 A 的引擎根本挂不上；
+且字幕槽位按约 5.5 字/秒写、克隆实测 6.28~6.62 字/秒——槽位比语音宽。
+预演（§5.2）684 条里撞句 0 条、超槽 2 条。用户拍板：
+
+> **配音保持自然速度优先，不硬塞槽位**；「让视频多放几秒」只适用于片尾——
+> 中段把某一幕延后会级联到后面所有幕 + 整集重渲染，为零点几秒不值得。
+
+固化为 `--fit-next`：窗口 = `min(下一句起点-0.10s, 槽位+1.5s)`，
+只在会撞下一句时 atempo ≤1.18x；末条不受限；片尾仅 speech 冲视频末才 tpad 延长。
+
+### 5.2 预演法（决定 A/B 的关键动作，先算后做）
+
+```python
+CPS = 6.62   # 参考音实测语速；新参考音先跑一小段 manifest 取 avg_cps
+for i, cue in enumerate(cues):
+    nat = len(re.sub(r"\s", "", cue.text)) / CPS
+    slot = cue.end - cue.start
+    nxt = cues[i+1].start if i+1 < len(cues) else inf
+    超槽 += nat > slot
+    撞句 += cue.start + nat > nxt - 0.05
+```
+
+以日为鉴 17 集结果：超槽合计 2 条（都在 Ep00）、撞句 0 条 → 全系列走 B。
+实测合成后 manifest 复核：Ep01 37 条 speedup 2（×1.02 可忽略）/ trim 0 / 自然溢槽 6（≤0.44s）；
+Ep02 36 条 speedup 0 / trim 0 / 自然溢槽 7（最大 0.80s）——预演估得准。
+
+### 5.3 adj_cer：中文计数稿的 CER 虚高一个量级（★ 批量必看）
+
+《以日为鉴》字幕稿用中文计数（「二零零三年」「百分之五十五」「七成七」「一九八九年」），
+Whisper 回环习惯转写阿拉伯数字（「2003年」「55%」「1989年」）——
+原样算 CER，Ep02 mean 0.139，看着像事故；归一化后 mean 0.025，实际健康。
+`qa_report.py` 的 `cn_norm` 规则：纯数字串按字符拼接（二零零三→2003、九二→92）、
+含十百千万按位值（四十七→47、五百万→500000）、`百分之X`→`X%`、`两`=2、小数（三点五→1.5）。
+两侧（原文/ASR）都过一遍归一化再算，对称才不会误伤。
+
+仍要人工甄别两类 ASR artifact（**不是 TTS 错，别去改字幕稿**）：
+① 繁体输出（Ep01 cue_021 ASR 回「驚的是開局,崗位銳減…」）——Whisper 抽风；
+② 数字形态差异。CER 接近 1.0 先查音频是否采样崩坏（§3.5）。
+真实误读基线：约 5/37 条单字错，集中在不常见词——
+平账→屏障、窗边族→窗边足、派遣→派全、输血→书写、寒冬→韩东、僵尸→沿江、
+缩招→塑胶、文部省→文布、付账→负责、临界→零件。
+**用户 2026-10-23 试听裁定：ASR 侧问题、成片听感正常，不逐句重配**，
+照此基线放行批量。后续若要修：`cue_NNN.wav` 单句重做 → 重跑 merge_dub。
+
+### 5.4 tpad 误触发教训：0.3s 静音垫尾不是溢出
+
+`synthesize_srt` 的整轨长度 = `max(末条 end, 语音实际结束) + 0.3s`。
+`merge_dub.py` 第一版用**音轨全长**判断片尾溢出，Ep02（语音 164.6s、垫尾后 165.1s、
+视频 165.0s）被垫尾误触发，白重编码一次还改了成片时长。
+修正：`--voice-end` 传 manifest 的 `voice_end_sec`（真实语音结束点），垫尾不算。
+**教训：判断「溢出」的永远是语义终点，不是容器长度。**
+
+### 5.5 环境坑：uv venv trampoline 启动器损坏
+
+症状：`.venv/Scripts/python.exe` 报
+`uv trampoline failed to spawn Python child process / permission denied (os error 5)`
+（Bash 与 PowerShell 均复现；pyvenv.cfg 的 home 指向的官方 python 本身是好的）。
+绕法——用 home 里的官方 python 直跑 + PYTHONPATH 指 venv site-packages：
+
+```bash
+"D:/Program Files/uv/python/cpython-3.12-windows-x86_64-none/python.exe" \
+  -c "..."   # 加 PYTHONPATH=<tts_qwen>/.venv/Lib/site-packages
+```
+
+torch 2.9.1+cu128 / CUDA / qwen_tts / librosa / faster_whisper 实测全部正常。
+
+### 5.6 前置门禁：字幕时间轴一致性检查（配音前必跑）
+
+项目侧 `subtitle_timeline_check.py`（scenes.js 的 currentSub 窗 vs SRT 绝对时间逐条比对）。
+以日为鉴 Ep01–Ep16 全 PASS；Ep00 是旧写法，工具输出 N/A——
+**N/A = 工具查不了 ≠ 没过检**，处理成人工抽 3 帧核对画面字幕与 SRT 再放行。
+错位为什么可怕：观众看到的字幕和听到的声音错开，**肉眼看画面发现不了，配音一上全片报废**。
+
+### 5.7 批量节奏数据（RTX 4060 Laptop 8GB，1.7B，串行单卡）
+
+| 项 | 实测 |
+|---|---|
+| 合成 | Ep01 37 条 288s / Ep02 36 条 241s ≈ 7~8s/条（含模型加载与重采） |
+| eval_voice 全量 | 36~37 条 1~2 分钟（Whisper large-v3 短句极快；TTS 先释放再跑 ASR） |
+| 并轨 | 视频流直拷，秒级；仅 tpad 分支重编码（约分钟级） |
+| 预估 | 17 集约 1.5~2h 合成 + QA，串行勿并行（8GB 单卡） |
