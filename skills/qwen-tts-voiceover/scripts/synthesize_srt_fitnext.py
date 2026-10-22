@@ -33,13 +33,19 @@ import soundfile as sf
 import soxr
 import torch
 
+# 运行时工程根：tts_cli.py 与模型权重都在 tts_qwen 工程里（不在本 skill 目录）。
+# 优先环境变量 TTS_QWEN_DIR；未设置时回退到本脚本父目录的父目录（tts_qwen 原位使用场景）。
+QWEN_ROOT = Path(os.environ.get("TTS_QWEN_DIR") or Path(__file__).resolve().parent.parent.parent)
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))
+for _p in (QWEN_ROOT / "scripts", ROOT / "scripts"):
+    if (_p / "tts_cli.py").exists():
+        sys.path.insert(0, str(_p))
+        break
 from tts_cli import parse_srt, normalize_text  # noqa: E402
 
 MODELS = {
-    "1.7b": ROOT / "models" / "Qwen3-TTS-12Hz-1.7B-Base",
-    "0.6b": ROOT / "models" / "Qwen3-TTS-12Hz-0.6B-Base",
+    "1.7b": QWEN_ROOT / "models" / "Qwen3-TTS-12Hz-1.7B-Base",
+    "0.6b": QWEN_ROOT / "models" / "Qwen3-TTS-12Hz-0.6B-Base",
 }
 # ffmpeg：默认取 PATH，可用 VIBE_FFMPEG 覆盖（项目私有 tools/ 目录等）
 FFMPEG = Path(os.environ.get("VIBE_FFMPEG", "ffmpeg"))
@@ -63,8 +69,8 @@ def time_stretch(wav: np.ndarray, sr: int, factor: float) -> np.ndarray:
     """factor>1 = 变短（加速）。用 ffmpeg atempo 保音高。"""
     if abs(factor - 1.0) < 0.005:
         return wav
-    tmp_in = ROOT / "output" / "_tmp_in.wav"
-    tmp_out = ROOT / "output" / "_tmp_out.wav"
+    tmp_in = QWEN_ROOT / "output" / "_tmp_in.wav"
+    tmp_out = QWEN_ROOT / "output" / "_tmp_out.wav"
     tmp_in.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(tmp_in), wav.astype(np.float32), sr)
     cmd = [str(FFMPEG), "-y", "-loglevel", "error", "-i", str(tmp_in),
@@ -103,7 +109,7 @@ def main():
     ap.add_argument("--max-overflow", type=float, default=1.5, help="单条允许溢出的最大秒数")
     args = ap.parse_args()
 
-    out_dir = Path(args.out_dir) if args.out_dir else ROOT / "output" / f"rea_{args.model}"
+    out_dir = Path(args.out_dir) if args.out_dir else QWEN_ROOT / "output" / f"yjrj_{args.model}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     torch.manual_seed(args.seed)

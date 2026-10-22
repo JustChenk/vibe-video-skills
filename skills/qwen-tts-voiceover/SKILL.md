@@ -261,6 +261,9 @@ cp <集目录>/字幕.srt assets/srt/epXX.srt     # 必须 cp，禁止用编辑�
 ### 阶段 5B · 路线 B：fit-next 逐句合成
 
 ```bash
+# 路线 B 三个脚本定位 tts_qwen 工程（模型权重 + tts_cli + venv）靠 TTS_QWEN_DIR；
+# ffmpeg 不在 PATH 时设 VIBE_FFMPEG/VIBE_FFPROBE
+export TTS_QWEN_DIR=<tts_qwen 工程根>
 python scripts/synthesize_srt_fitnext.py --model 1.7b \
   --ref-audio assets/ref/ref_cand1.wav \
   --ref-text "$(cat assets/ref/ref_cand1.txt)" \
