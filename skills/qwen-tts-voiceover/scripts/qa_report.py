@@ -58,8 +58,8 @@ def _int_cn(s: str) -> int:
 
 def cn_norm(s: str) -> str:
     """中文计数 → 阿拉伯数字，便于与 Whisper 回环做公平 CER 比较。"""
-    # 百分之X → X%
-    s = re.sub(r"百分之([零一二三四五六七八九十百千]+)",
+    # 百分之X → X%（X 可含小数：零点九 → 0.9）
+    s = re.sub(r"百分之([零一二三四五六七八九十百千点]+)",
                lambda m: _run_to_num(m.group(1)) + "%", s)
     # 其余中文数字 run → 阿拉伯数字
     s = re.sub(r"[零一二三四五六七八九十百千点]+",
