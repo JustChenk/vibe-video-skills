@@ -1,34 +1,34 @@
 /* =========================================================
- * cover.js — 抖音封面 Canvas 绘制引擎（douyin-cover-generator skill）
+ * cover.js — 夜场光场封面引擎 v2（douyin-cover-generator skill）
  *
  * 运行环境：浏览器页面（templates/cover.html），由 scripts/render-cover.js
  * 通过 playwright-core 截图调用。纯 Canvas 2D，零外部依赖。
- * 与视频制作管线（handdrawn-explainer-video 的 render.js）完全同栈。
+ *
+ * 设计内核（v2 重构，2026-10-18）：
+ *   1. 暗场不黑——五段墨色渐变 + 三层大气光 + 暗角，永远不是一块死灰
+ *   2. 光即隐喻——每张封面只有一个光的结构，且必须和文案说同一件事
+ *   3. 字是主角——两行硬碰、吃满画幅宽度、逐字字距，不用描边凑对比
+ *   4. 双色分层——常规行冷白、强调行金；金色「先糊一层大晕、再叠实体渐变」
+ *   5. 一枚印章——全图唯一高饱和色，歪 3°，只用来压紧迫感
+ *   6. 编辑暗号——页眉/EP徽标/细线菱形/mono 标注/四角裁切/胶片颗粒
  *
  * 对外接口：window.renderCover(config) -> Promise<void>
  *   config = {
- *     title, subtitle, tag, kicker: string
- *     layout: 'title' | 'brand'                （默认 title = 片名当主角；brand = 系列标识当主角）
- *     kickerScale, titleScale: number           （字号缩放，默认 1；品牌优先版式下微调用）
+ *     title, subtitle, kicker, issue, stamp, note: string
+ *     scene: 'threshold' | 'orbit' | 'beam' | 'plain'   （默认 threshold）
+ *     layout: 'title' | 'brand'    （brand = 系列名入标题块首行、片名降一档）
+ *     accentLine: 'last' | 'first' | 'all' | 'none'     （默认 last，哪一行用金色）
  *     ratio: '3:4' | '4:3' | '9:16' | '16:9' | '1:1'   （默认 3:4 竖版）
- *     size: [w, h]                             （可选，覆盖 ratio 默认画布）
- *     bg: { type: 'gradient' | 'image', src?: string, darken?: number, scrim?: boolean, style?: string }
- *     colors: { title, stroke, subtitle, tag, tagText }
- *     bar: string        （标题色块底色；'' = 不使用色块）
- *     shadow: boolean    （标题柔和投影）
- *     font: string       （自定义字体族；'' = 默认字体栈）
+ *     size: [w, h]
+ *     bg: { type:'gradient'|'image', src, darken, scrim }
+ *     colors: { title（金/强调）, base（冷白）, subtitle, tag（印章红） }
+ *     font: string
  *   }
- *
- * 版式（layout）：
- *   title（默认）—— 片名是封面主角：片名巨型黄字，kicker 只是顶部/左上角的小字系列标识。
- *   brand        —— 系列标识是封面主角：kicker 用主标题样式（主色+描边+投影）放到片名原来的
- *                   位置，片名降一档为白色副行。系列化运营（观众先认系列、再认单集）时用。
  * ========================================================= */
 (function () {
   'use strict';
 
-  /* 默认比例：竖版 3:4（1080x1440）/ 横版 4:3（1920x1440，与成片同宽 1920，分辨率更高）；
-     9:16、16:9、1:1 仍然支持，作为可选比例保留 */
+  /* 默认比例：竖版 3:4（1080x1440）/ 横版 4:3（1920x1440，与成片同宽） */
   var RATIOS = {
     '3:4': [1080, 1440],
     '4:3': [1920, 1440],
@@ -37,12 +37,31 @@
     '1:1': [1080, 1080]
   };
 
-  /** 中文粗体字体栈：Windows 微软雅黑 → macOS 苹方 → Linux Noto Sans SC */
-  var FONT_STACK = '"Microsoft YaHei","PingFang SC","Noto Sans SC","Source Han Sans SC","HarmonyOS Sans SC",sans-serif';
+  /** 中文粗体字体栈：Windows 微软雅黑 → macOS 苹方 → Linux/鸿蒙 Noto */
+  var FONT = '"Microsoft YaHei","PingFang SC","Noto Sans SC","Source Han Sans SC","HarmonyOS Sans SC",sans-serif';
+  /** 技术标注用等宽字体 */
+  var MONO = '"SF Mono","Consolas","Roboto Mono","DejaVu Sans Mono",monospace';
 
-  var BREAK_PUNCT = '，。！？、；：,.!?;:~～—…';
+  /** 中文标题字距 = 0.058em（标题越大字距越大，视觉上才不会「挤成一块」） */
+  var TRACK = 0.058;
 
-  /* ---------- 工具：确定性随机（同一配置输出稳定可复现） ---------- */
+  /** 旧 --style 名 → 新 scene 名（保证老命令不炸） */
+  var SCENE_ALIAS = {
+    threshold: 'threshold',
+    orbit: 'orbit',
+    beam: 'beam',
+    plain: 'plain',
+    dazibao: 'threshold',  // 旧：大字报 → 门槛光栅
+    glow: 'orbit',         // 旧：辉光粒子 → 光轮
+    rays: 'beam',          // 旧：斜射光束 → 光束
+    grid: 'plain'          // 旧：科技网格 → 纯暗场
+  };
+
+  /* =========================================================
+     1. 基础工具
+     ========================================================= */
+
+  /** 确定性随机：同一配置输出稳定可复现 */
   function mulberry32(seed) {
     var a = seed >>> 0;
     return function () {
@@ -53,10 +72,36 @@
     };
   }
 
-  /** 正数取用，否则回退默认值（给 --kicker-scale / --title-scale 这类倍率参数用） */
   function num(v, dflt) {
     var n = parseFloat(v);
     return isFinite(n) && n > 0 ? n : dflt;
+  }
+
+  function rgb(hex) {
+    var s = String(hex || '#ffffff').replace('#', '');
+    if (s.length === 3) s = s[0] + s[0] + s[1] + s[1] + s[2] + s[2];
+    var n = parseInt(s, 16);
+    if (!isFinite(n)) n = 0xffffff;
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  function mix(hex, to, t) {
+    var a = rgb(hex), b = rgb(to);
+    var out = '#';
+    for (var i = 0; i < 3; i++) {
+      var v = Math.round(a[i] + (b[i] - a[i]) * t);
+      out += ('0' + Math.max(0, Math.min(255, v)).toString(16)).slice(-2);
+    }
+    return out;
+  }
+
+  function rgba(hex, a) {
+    var c = rgb(hex);
+    return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')';
+  }
+
+  function setFont(ctx, size, weight, family) {
+    ctx.font = (weight || 900) + ' ' + size + 'px ' + (family || FONT);
   }
 
   function roundRect(ctx, x, y, w, h, r) {
@@ -70,22 +115,109 @@
     ctx.closePath();
   }
 
-  /* ---------- 标题折行：>12 字折 2 行，优先按标点/空格断行 ---------- */
+  function radial(ctx, x, y, r, stops) {
+    if (r <= 0) return;
+    var g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    for (var i = 0; i < stops.length; i++) g.addColorStop(stops[i][0], stops[i][1]);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function line(ctx, x1, y1, x2, y2) {
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+
+  /* ---------- 逐字排版：中文标题的字距只能自己算 ---------- */
+  function measureTracked(ctx, text, size, tracking, weight, family) {
+    setFont(ctx, size, weight, family);
+    var chars = String(text).split('');
+    var total = 0;
+    for (var i = 0; i < chars.length; i++) total += ctx.measureText(chars[i]).width;
+    return total + tracking * Math.max(0, chars.length - 1);
+  }
+
+  /**
+   * 逐字绘制并返回总宽
+   * x：align=center 时为中心，align=left 时为左缘；baseline：字母基线
+   */
+  function drawTracked(ctx, text, x, baseline, size, tracking, fill, o) {
+    o = o || {};
+    setFont(ctx, size, o.weight || 900, o.family);
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+    var chars = String(text).split('');
+    var ws = [];
+    var total = 0;
+    var i;
+    for (i = 0; i < chars.length; i++) {
+      var w = ctx.measureText(chars[i]).width;
+      ws.push(w);
+      total += w;
+    }
+    total += tracking * Math.max(0, chars.length - 1);
+    var cursor = o.align === 'left' ? x : x - total / 2;
+    for (i = 0; i < chars.length; i++) {
+      if (chars[i] !== ' ') {
+        ctx.fillStyle = fill;
+        ctx.fillText(chars[i], cursor, baseline);
+      }
+      cursor += ws[i] + tracking;
+    }
+    return total;
+  }
+
+  /** 从上限往下试，找到能塞进 maxW 的最大字号 */
+  function fitSize(ctx, text, maxW, cap, trackingRatio) {
+    var s = cap;
+    while (s > 20 && measureTracked(ctx, text, s, s * trackingRatio) > maxW) s -= 2;
+    return Math.max(16, s);
+  }
+
+  var BREAK_PUNCT = '，。！？、；：,.!?;:~～—…';
+
+  /**
+   * 选中缝位置：标点最优先，其次按 Intl.Segmenter 的中文词边界，
+   * 都尽量靠近中点。避免把「省钱」这种词从中间劈开。
+   */
+  function pickBreak(text) {
+    var target = text.length / 2;
+    var best = -1, bestScore = -1e9, i;
+    function consider(idx, bonus) {
+      if (idx <= 0 || idx >= text.length) return;
+      var score = bonus + 40 - Math.abs(idx - target);
+      if (score >= bestScore) { bestScore = score; best = idx; }
+    }
+    for (i = 1; i < text.length; i++) {
+      if (BREAK_PUNCT.indexOf(text[i - 1]) >= 0 || text[i] === ' ') consider(i, 100);
+    }
+    try {
+      if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+        var seg = new Intl.Segmenter('zh-Hans', { granularity: 'word' });
+        var idx = 0;
+        var parts = seg.segment(text);
+        for (var s of parts) {
+          idx += s.segment.length;
+          consider(idx, 30);
+        }
+      }
+    } catch (e) { /* 没有 Segmenter 就退回中点 */ }
+    if (best < 0) best = Math.ceil(text.length / 2);
+    return best;
+  }
+
+  /** 标题折行：显式 \n 优先；否则在词边界处切，最多 maxLines 行 */
   function wrapTitle(text, wrapAt, maxLines) {
-    /* 显式换行优先：标题里带 \n 就按 \n 切，便于人工控制断行位置（短行能拿到更大字号） */
-    if (text.indexOf('\n') >= 0) {
-      return text.split('\n').map(function (s) { return s.trim(); })
+    if (String(text).indexOf('\n') >= 0) {
+      return String(text).split('\n').map(function (s) { return s.trim(); })
         .filter(function (s) { return s; }).slice(0, maxLines);
     }
     if (text.length <= wrapAt) return [text];
-    var best = -1, bestScore = -1;
-    for (var i = 1; i < text.length; i++) {
-      if (BREAK_PUNCT.indexOf(text[i - 1]) >= 0 || text[i] === ' ') {
-        var score = 100 - Math.abs(i - text.length / 2);
-        if (score > bestScore) { best = i; bestScore = score; }
-      }
-    }
-    if (best < 0) best = Math.ceil(text.length / 2);
+    var best = pickBreak(text);
     var lines = [text.slice(0, best).trim(), text.slice(best).trim()];
     if (text.length > wrapAt * maxLines) {
       var per = Math.ceil(text.length / maxLines);
@@ -97,340 +229,765 @@
     return lines.filter(function (l) { return l; });
   }
 
-  /* ---------- 字号自适应：从 maxSize 递减至最长行（含描边）放得下 ---------- */
-  function fitTitle(ctx, lines, fontFamily, maxWidth, maxSize, minSize) {
-    var size = maxSize;
-    while (size > minSize) {
-      ctx.font = '900 ' + size + 'px ' + fontFamily;
-      var sw = Math.max(2, size / 12);
-      var widest = 0;
-      for (var i = 0; i < lines.length; i++) {
-        var lw = ctx.measureText(lines[i]).width + sw * 2;
-        if (lw > widest) widest = lw;
-      }
-      if (widest <= maxWidth) break;
-      size -= 4;
-    }
-    ctx.font = '900 ' + size + 'px ' + fontFamily;
-    return size;
+  /* =========================================================
+     2. 色板与版式度量
+     ========================================================= */
+
+  function palette(cfg) {
+    var accent = cfg.colors.title || '#FFC53D';
+    return {
+      accent: accent,
+      base: cfg.colors.base || '#F2F6FF',
+      sub: cfg.colors.subtitle || '#E9F0FF',
+      stamp: cfg.colors.tag || '#FF5A3C',
+      accentHi: mix(accent, '#FFFFFF', 0.74),
+      accentMid: mix(accent, '#FFFFFF', 0.24),
+      accentLo: mix(accent, '#000000', 0.14),
+      baseHi: '#FFFFFF',
+      baseLo: mix(cfg.colors.base || '#F2F6FF', '#7F95B8', 0.42)
+    };
   }
 
-  /* ---------- 背景：程序化风格 ---------- */
-  function drawProceduralBg(ctx, w, h, style) {
-    var g = ctx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, '#0E1115');
-    g.addColorStop(1, '#282F38');
+  /** 所有位置都是画幅比例，换比例不用改代码；横竖版共用中轴构图，只调重心 */
+  function metrics(w, h, vertical) {
+    return {
+      vertical: vertical,
+      headerBase: h * 0.075,
+      headerX: w * 0.085,
+      titleX: w * 0.5,
+      titleAlign: 'center',
+      titleCenterY: h * (vertical ? 0.365 : 0.353),
+      titleMaxW: w * 0.86,
+      titleCap: h * (vertical ? 0.20 : 0.235),
+      blockMaxH: h * (vertical ? 0.30 : 0.34),
+      ruleY: h * 0.553,
+      gateY: h * (vertical ? 0.668 : 0.745),
+      subBase: h * (vertical ? 0.903 : 0.625),
+      subX: w * 0.5,
+      subAlign: 'center'
+    };
+  }
+
+  /* =========================================================
+     3. 场景：底 + 光结构（每张封面只允许一个）
+     ========================================================= */
+
+  function drawBase(ctx, w, h, m, p, vertical) {
+    var g = ctx.createLinearGradient(0, 0, w * 0.35, h);
+    g.addColorStop(0.00, '#05060C');
+    g.addColorStop(0.30, '#0A1022');
+    g.addColorStop(0.55, '#0B1226');
+    g.addColorStop(0.76, '#070A15');
+    g.addColorStop(1.00, '#03040A');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
 
-    var rnd = mulberry32(20261013);
-    var i, x, y;
-
-    if (style === 'grid') {
-      // 科技网格 + 底部辉光
-      ctx.strokeStyle = 'rgba(255,255,255,0.05)';
-      ctx.lineWidth = 1;
-      var step = Math.round(w / 18);
-      for (x = 0; x <= w; x += step) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
-      for (y = 0; y <= h; y += step) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
-      var rg = ctx.createRadialGradient(w * 0.5, h * 0.72, 0, w * 0.5, h * 0.72, w * 0.75);
-      rg.addColorStop(0, 'rgba(64,164,224,0.16)');
-      rg.addColorStop(1, 'rgba(64,164,224,0)');
-      ctx.fillStyle = rg;
-      ctx.fillRect(0, 0, w, h);
-    } else if (style === 'glow') {
-      // 多层径向辉光 + 粒子
-      var blobs = [
-        [0.28, 0.30, 0.42, 'rgba(56,152,236,0.30)'],
-        [0.74, 0.62, 0.50, 'rgba(126,87,255,0.22)'],
-        [0.50, 0.88, 0.36, 'rgba(255,184,0,0.10)']
-      ];
-      for (i = 0; i < blobs.length; i++) {
-        var b = blobs[i];
-        var bg2 = ctx.createRadialGradient(w * b[0], h * b[1], 0, w * b[0], h * b[1], w * b[2]);
-        bg2.addColorStop(0, b[3]);
-        bg2.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = bg2;
-        ctx.fillRect(0, 0, w, h);
-      }
-      for (i = 0; i < 46; i++) {
-        x = rnd() * w; y = rnd() * h;
-        var r = 1.5 + rnd() * 4;
-        ctx.fillStyle = 'rgba(255,255,255,' + (0.08 + rnd() * 0.22).toFixed(3) + ')';
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-      }
-    } else if (style === 'rays') {
-      // 顶部斜射光束
-      ctx.save();
-      ctx.translate(w * 0.5, -h * 0.12);
-      for (i = 0; i < 7; i++) {
-        ctx.save();
-        ctx.rotate((-0.9 + i * 0.28) + (rnd() - 0.5) * 0.06);
-        var lg = ctx.createLinearGradient(0, 0, 0, h * 1.25);
-        lg.addColorStop(0, 'rgba(120,190,255,0.13)');
-        lg.addColorStop(1, 'rgba(120,190,255,0)');
-        ctx.fillStyle = lg;
-        var bw = w * (0.018 + rnd() * 0.03);
-        ctx.fillRect(-bw / 2, 0, bw, h * 1.25);
-        ctx.restore();
-      }
-      ctx.restore();
-      var rg2 = ctx.createRadialGradient(w * 0.5, h * 0.18, 0, w * 0.5, h * 0.18, w * 0.6);
-      rg2.addColorStop(0, 'rgba(90,160,255,0.14)');
-      rg2.addColorStop(1, 'rgba(90,160,255,0)');
-      ctx.fillStyle = rg2;
-      ctx.fillRect(0, 0, w, h);
-    } else if (style === 'dazibao') {
-      // 大字报风：粗描边圆环 + 四角标
-      // 圆环尺寸同时受宽与高约束（min），否则 3:4 / 4:3 这类较"矮"的画布上圆环会溢出画布或压住字幕
-      var cy = h * 0.60;
-      var r1 = Math.min(w * 0.36, h * 0.20);
-      var r2 = Math.min(w * 0.42, h * 0.235);
-      ctx.strokeStyle = 'rgba(255,212,0,0.20)';
-      ctx.lineWidth = Math.max(4, w * 0.006);
-      ctx.beginPath(); ctx.arc(w * 0.5, cy, r1, 0, Math.PI * 2); ctx.stroke();
-      ctx.strokeStyle = 'rgba(255,59,48,0.35)';
-      ctx.lineWidth = Math.max(3, w * 0.004);
-      ctx.beginPath(); ctx.arc(w * 0.5, cy, r2, 0, Math.PI * 2); ctx.stroke();
-      var m = w * 0.06, arm = w * 0.09;
-      ctx.strokeStyle = 'rgba(255,212,0,0.55)';
-      ctx.lineWidth = Math.max(4, w * 0.007);
-      var corners = [[m, m, 1, 1], [w - m, m, -1, 1], [m, h - m, 1, -1], [w - m, h - m, -1, -1]];
-      for (i = 0; i < corners.length; i++) {
-        var c = corners[i];
-        ctx.beginPath();
-        ctx.moveTo(c[0] + c[2] * arm, c[1]); ctx.lineTo(c[0], c[1]); ctx.lineTo(c[0], c[1] + c[3] * arm);
-        ctx.stroke();
-      }
-    }
-    // 'plain'：仅渐变底
-
-    // 通用暗角，保证文字区对比
-    var vg = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.max(w, h) * 0.75);
-    vg.addColorStop(0, 'rgba(0,0,0,0)');
-    vg.addColorStop(1, 'rgba(0,0,0,0.35)');
-    ctx.fillStyle = vg;
-    ctx.fillRect(0, 0, w, h);
+    var ax = vertical ? w * 0.51 : w * 0.30;
+    var ay = vertical ? h * 0.46 : h * 0.42;
+    radial(ctx, ax, ay, Math.max(w, h) * 0.47, [
+      [0, rgba(p.accent, 0.16)],
+      [0.45, rgba(p.accent, 0.06)],
+      [1, rgba(p.accent, 0)]
+    ]);
+    radial(ctx, ax, ay + h * 0.03, Math.max(w, h) * 0.26, [
+      [0, rgba(p.accent, 0.10)],
+      [1, rgba(p.accent, 0)]
+    ]);
+    radial(ctx, w * 0.09, h * 0.66, Math.max(w, h) * 0.46, [
+      [0, 'rgba(58,104,255,0.13)'],
+      [1, 'rgba(58,104,255,0)']
+    ]);
+    radial(ctx, w * 0.92, h * 0.25, Math.max(w, h) * 0.38, [
+      [0, 'rgba(122,84,255,0.10)'],
+      [1, 'rgba(122,84,255,0)']
+    ]);
   }
 
-  /* ---------- 背景：自有图片（居中裁切 + 压暗 + 横版左侧 scrim） ---------- */
-  function drawImageBg(ctx, img, w, h, darken, scrim) {
-    var iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  function drawStars(ctx, w, h, p, rnd) {
+    var n = Math.min(720, Math.round((w * h) / 4200));
+    ctx.save();
+    for (var i = 0; i < n; i++) {
+      var x = rnd() * w;
+      var y = Math.pow(rnd(), 0.85) * h * 0.98;
+      var r = Math.pow(rnd(), 2.6) * (h * 0.0013) + h * 0.00018;
+      var fade = 1 - Math.max(0, (y - h * 0.68) / (h * 0.45)) * 0.6;
+      ctx.globalAlpha = (0.10 + rnd() * 0.7) * fade;
+      ctx.fillStyle = rnd() > 0.84 ? '#CFE1FF' : '#FFFFFF';
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // 柔焦光斑：让暗部有厚度
+    for (var k = 0; k < 6; k++) {
+      var bx = w * (0.05 + rnd() * 0.9);
+      var by = h * (0.05 + rnd() * 0.9);
+      var br = h * (0.02 + rnd() * 0.05);
+      radial(ctx, bx, by, br, [
+        [0, 'rgba(198,220,255,' + (0.045 + rnd() * 0.04).toFixed(3) + ')'],
+        [1, 'rgba(150,180,255,0)']
+      ]);
+    }
+  }
+
+  /** 四芒星：暗场里的呼吸点 */
+  function flare(ctx, x, y, s, a) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    radial(ctx, x, y, s * 3.4, [
+      [0, 'rgba(255,248,232,' + a + ')'],
+      [0.3, 'rgba(255,224,168,' + (a * 0.26).toFixed(3) + ')'],
+      [1, 'rgba(255,205,130,0)']
+    ]);
+    ctx.strokeStyle = 'rgba(255,242,220,' + a + ')';
+    ctx.lineCap = 'round';
+    var spikes = [[1, 0, 3.6, 1.2], [0, 1, 2.2, 1], [-1, 0, 2.0, 0.9], [0, -1, 1.5, 0.8]];
+    for (var i = 0; i < spikes.length; i++) {
+      var dx = spikes[i][0], dy = spikes[i][1], len = spikes[i][2], lw = spikes[i][3];
+      ctx.lineWidth = lw;
+      line(ctx, x - dx * s * len, y - dy * s * len, x + dx * s * len, y + dy * s * len);
+    }
+    ctx.restore();
+  }
+
+  function drawFlares(ctx, w, h, vertical) {
+    var pts = vertical
+      ? [[0.18, 0.205, 0.0056, 0.5], [0.86, 0.315, 0.0042, 0.4], [0.13, 0.60, 0.0042, 0.32], [0.93, 0.20, 0.003, 0.3]]
+      : [[0.40, 0.16, 0.005, 0.45], [0.72, 0.24, 0.004, 0.36], [0.90, 0.62, 0.004, 0.3]];
+    for (var i = 0; i < pts.length; i++) {
+      flare(ctx, w * pts[i][0], h * pts[i][1], h * pts[i][2], pts[i][3]);
+    }
+  }
+
+  /** 场景一：门槛——光束汇集到一道封死的横栏（最契合「路径/门槛/期限」） */
+  function sceneThreshold(ctx, w, h, m, p, vertical, note) {
+    var gateY = m.gateY;
+    var x0 = w * (vertical ? 0.08 : 0.06);
+    var x1 = w * (vertical ? 0.92 : 0.94);
+    var vpx = (x0 + x1) / 2;
+    var s0 = vertical ? 0.02 : 0.03;
+    var s1 = vertical ? 0.98 : 0.97;
+    var endY = h * (vertical ? 0.846 : 1.00);
+    var i;
+
+    // 地面光池
+    ctx.save();
+    ctx.translate(vpx, gateY + h * 0.034);
+    ctx.scale(1, 0.30);
+    ctx.globalCompositeOperation = 'lighter';
+    radial(ctx, 0, 0, (x1 - x0) * 0.42, [
+      [0, rgba(p.accent, 0.16)],
+      [1, rgba(p.accent, 0)]
+    ]);
+    ctx.restore();
+
+    // 十二条光路
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+    var N = 12;
+    var rayW = Math.max(6, h * 0.0072);
+    for (i = 0; i < N; i++) {
+      var t = i / (N - 1);
+      var ex = (s0 + t * (s1 - s0)) * w;
+      var mid = Math.sin(Math.PI * t);
+      var g = ctx.createLinearGradient(vpx, gateY, ex, endY);
+      g.addColorStop(0.00, rgba(p.accent, 0.58 + mid * 0.28));
+      g.addColorStop(0.20, rgba(p.accent, 0.28 + mid * 0.12));
+      g.addColorStop(0.62, rgba(p.accent, 0.10));
+      g.addColorStop(1.00, rgba(p.accent, 0));
+      ctx.strokeStyle = g;
+      ctx.globalAlpha = 0.14;
+      ctx.lineWidth = rayW;
+      line(ctx, vpx, gateY, ex, endY);
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = Math.max(1, h * 0.0014);
+      line(ctx, vpx, gateY, ex, endY);
+    }
+    // 余脉：一路渗到画框下沿，避免下半部发空
+    ctx.globalAlpha = 1;
+    var tail = ctx.createLinearGradient(0, endY - h * 0.04, 0, h);
+    tail.addColorStop(0, rgba(p.accent, 0.05));
+    tail.addColorStop(1, rgba(p.accent, 0.012));
+    ctx.strokeStyle = tail;
+    ctx.lineWidth = Math.max(1, h * 0.0009);
+    for (i = 0; i < N; i++) {
+      var tt = i / (N - 1);
+      var exx = (s0 + tt * (s1 - s0)) * w;
+      var py = endY - h * 0.035;
+      var px = vpx + (exx - vpx) * (py - gateY) / (h - gateY);
+      line(ctx, px, py, exx, h + h * 0.02);
+    }
+    ctx.restore();
+
+    // 栅栏
+    var step = w * 0.026;
+    for (var x = x0 + step; x < x1 - step; x += step) {
+      var k = Math.sin(Math.PI * (x - x0) / (x1 - x0));
+      ctx.fillStyle = rgba(p.accent, 0.05 + Math.max(0, k) * 0.15);
+      ctx.fillRect(x, gateY - h * 0.0235, Math.max(1, w * 0.0015), h * 0.047);
+    }
+
+    // 门柱
+    var posts = [x0, x1];
+    for (i = 0; i < posts.length; i++) {
+      var pg = ctx.createLinearGradient(0, gateY - h * 0.043, 0, gateY + h * 0.043);
+      pg.addColorStop(0, rgba(p.accent, 0));
+      pg.addColorStop(0.5, rgba(mix(p.accent, '#FFFFFF', 0.55), 0.92));
+      pg.addColorStop(1, rgba(p.accent, 0));
+      ctx.fillStyle = pg;
+      ctx.fillRect(posts[i] - Math.max(1, w * 0.0016), gateY - h * 0.043, Math.max(2, w * 0.0032), h * 0.086);
+    }
+
+    // 横梁
+    ctx.save();
+    var barG = ctx.createLinearGradient(x0, 0, x1, 0);
+    barG.addColorStop(0.00, rgba(p.accent, 0));
+    barG.addColorStop(0.14, rgba(mix(p.accent, '#FFFFFF', 0.45), 0.6));
+    barG.addColorStop(0.50, rgba(mix(p.accent, '#FFFFFF', 0.86), 0.98));
+    barG.addColorStop(0.86, rgba(mix(p.accent, '#FFFFFF', 0.45), 0.6));
+    barG.addColorStop(1.00, rgba(p.accent, 0));
+    ctx.shadowColor = rgba(p.accent, 0.92);
+    ctx.shadowBlur = h * 0.026;
+    ctx.fillStyle = barG;
+    ctx.fillRect(x0, gateY - Math.max(1, h * 0.0018), x1 - x0, Math.max(3, h * 0.003));
+    ctx.restore();
+
+    // 技术标注（可选）：唯一允许出现在光结构上的文字
+    if (note) {
+      ctx.save();
+      ctx.globalAlpha = 0.38;
+      var ns = h * 0.0126;
+      var nt = h * 0.005;
+      var nw = measureTracked(ctx, note, ns, nt, 400, MONO);
+      if (nw > w * 0.6) { ns *= (w * 0.6) / nw; nt *= (w * 0.6) / nw; }
+      drawTracked(ctx, note, vpx, gateY - h * 0.036, ns, nt, rgba(p.accent, 0.9), {
+        weight: 400, family: MONO
+      });
+      ctx.restore();
+    }
+  }
+
+  /** 场景二：光轮——一枚行星的边缘横贯画面，适合「周期/门槛/命运」 */
+  function sceneOrbit(ctx, w, h, m, p, vertical) {
+    var cx = w * 0.5;
+    var cy = h * (vertical ? 1.34 : 1.30);
+    var r = h * (vertical ? 0.60 : 0.56);
+    var i;
+
+    // 地平线上方的余晖：先让「行星」有大气
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    radial(ctx, cx, cy - r, r * 0.62, [
+      [0, rgba(p.accent, 0.075)],
+      [0.5, rgba(p.accent, 0.03)],
+      [1, rgba(p.accent, 0)]
+    ]);
+    radial(ctx, cx, cy - r * 0.02, r * 1.06, [
+      [0.90, rgba(p.accent, 0)],
+      [0.985, rgba(p.accent, 0.05)],
+      [1, rgba(p.accent, 0)]
+    ]);
+    ctx.restore();
+
+    // 星球本体：把背景压成实体（边缘以下不再透星光）
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(3,5,12,0.68)';
+    ctx.fill();
+
+    // 边缘光晕：整条边缘先糊一层，再按角度叠亮段
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.shadowColor = rgba(p.accent, 0.85);
+    ctx.shadowBlur = h * 0.032;
+    ctx.strokeStyle = rgba(p.accent, 0.26);
+    ctx.lineWidth = Math.max(2, h * 0.0032);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
+    // 按角度分 128 段：光源在正上方
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (i = 0; i < 128; i++) {
+      var a0 = (i / 128) * Math.PI * 2;
+      var a1 = ((i + 1) / 128) * Math.PI * 2;
+      var ang = (a0 + a1) / 2;
+      var k = 0.18 + 0.82 * Math.max(0, Math.cos(ang + Math.PI / 2));
+      ctx.strokeStyle = rgba(p.accent, (0.55 * k).toFixed(3));
+      ctx.lineWidth = Math.max(2, h * 0.0022);
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, a0, a1 + 0.006);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 十二根刻度：沿可见弧面排开，把「12」藏进结构里
+    ctx.save();
+    var dir = Math.atan2(h / 2 - cy, w / 2 - cx);
+    for (i = 0; i < 12; i++) {
+      var t = (i / 11 - 0.5) * 0.9;
+      var a3 = dir + t;
+      var k2 = 0.25 + 0.75 * Math.cos(t * 1.4);
+      ctx.strokeStyle = rgba(p.accent, (0.36 * k2).toFixed(3));
+      ctx.lineWidth = Math.max(1, h * 0.0011);
+      line(ctx,
+        cx + Math.cos(a3) * r * 1.014, cy + Math.sin(a3) * r * 1.014,
+        cx + Math.cos(a3) * r * 1.052, cy + Math.sin(a3) * r * 1.052);
+    }
+    ctx.restore();
+  }
+
+  /** 光束模板：横向软边 + 纵向渐隐，用离屏层烘焙，避免 ctx.filter 的平台差异 */
+  function makeShaft(color) {
+    var c2 = document.createElement('canvas');
+    c2.width = 128;
+    c2.height = 256;
+    var g2 = c2.getContext('2d');
+    var vg = g2.createLinearGradient(0, 0, 0, 256);
+    vg.addColorStop(0.00, rgba(color, 1));
+    vg.addColorStop(0.35, rgba(color, 0.7));
+    vg.addColorStop(0.70, rgba(color, 0.28));
+    vg.addColorStop(1.00, rgba(color, 0.06));
+    g2.fillStyle = vg;
+    g2.fillRect(0, 0, 128, 256);
+    g2.globalCompositeOperation = 'destination-in';
+    var hg = g2.createLinearGradient(0, 0, 128, 0);
+    hg.addColorStop(0.00, 'rgba(0,0,0,0)');
+    hg.addColorStop(0.30, 'rgba(0,0,0,0.5)');
+    hg.addColorStop(0.50, 'rgba(0,0,0,1)');
+    hg.addColorStop(0.70, 'rgba(0,0,0,0.5)');
+    hg.addColorStop(1.00, 'rgba(0,0,0,0)');
+    g2.fillStyle = hg;
+    g2.fillRect(0, 0, 128, 256);
+    return c2;
+  }
+
+  /** 场景三：光束——一束斜穿画面的体积光，适合情绪/故事 */
+  function sceneBeam(ctx, w, h, m, p, vertical) {
+    var i;
+    var tpl = makeShaft(p.accent);
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.translate(w * 0.5, -h * 0.18);
+    var shafts = [
+      { x: -0.10, rot: -0.40, wid: 0.30, a: 0.20 },
+      { x: 0.10, rot: -0.30, wid: 0.16, a: 0.24 },
+      { x: 0.42, rot: -0.56, wid: 0.36, a: 0.12 }
+    ];
+    for (i = 0; i < shafts.length; i++) {
+      var s = shafts[i];
+      ctx.save();
+      ctx.rotate(s.rot);
+      ctx.globalAlpha = s.a;
+      ctx.drawImage(tpl, w * s.x, 0, w * s.wid, h * 1.5);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+
+    // 光刃：一条锐利的高光边，给光束一个「入射方向」
+    ctx.save();
+    ctx.rotate(-0.34);
+    var eg = ctx.createLinearGradient(0, 0, 0, h * 1.35);
+    eg.addColorStop(0, rgba(mix(p.accent, '#FFFFFF', 0.72), 0.5));
+    eg.addColorStop(0.55, rgba(mix(p.accent, '#FFFFFF', 0.4), 0.14));
+    eg.addColorStop(1, rgba(p.accent, 0));
+    ctx.fillStyle = eg;
+    ctx.fillRect(w * 0.115, 0, Math.max(1.5, w * 0.0018), h * 1.35);
+    ctx.restore();
+    ctx.restore();
+
+    // 入射点的光核
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    radial(ctx, w * 0.47, h * 0.02, Math.max(w, h) * 0.36, [
+      [0, rgba(p.accent, 0.12)],
+      [0.55, rgba(p.accent, 0.04)],
+      [1, rgba(p.accent, 0)]
+    ]);
+    ctx.restore();
+
+    // 落地光池：光要有落点，画面才不会头重脚轻
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.translate(w * 0.66, h * 1.0);
+    ctx.scale(1, 0.22);
+    radial(ctx, 0, 0, w * 0.48, [
+      [0, rgba(p.accent, 0.09)],
+      [1, rgba(p.accent, 0)]
+    ]);
+    ctx.restore();
+
+    // 尘埃：只在光里才看得见
+    var rnd = mulberry32(7717 + Math.round(w));
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (i = 0; i < 46; i++) {
+      var dx = rnd() * w;
+      var dy = h * (0.05 + rnd() * 0.62);
+      var dr = h * (0.0006 + rnd() * 0.0016);
+      ctx.globalAlpha = 0.10 + rnd() * 0.28;
+      ctx.fillStyle = '#FFE7BE';
+      ctx.beginPath();
+      ctx.arc(dx, dy, dr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawScene(ctx, w, h, m, p, cfg, vertical) {
+    drawBase(ctx, w, h, m, p, vertical);
+    var rnd = mulberry32(20261018 + Math.round(w * 7 + h));
+    drawStars(ctx, w, h, p, rnd);
+    drawFlares(ctx, w, h, vertical);
+
+    var scene = SCENE_ALIAS[cfg.scene] || 'threshold';
+    if (scene === 'threshold') sceneThreshold(ctx, w, h, m, p, vertical, cfg.note);
+    else if (scene === 'orbit') sceneOrbit(ctx, w, h, m, p, vertical);
+    else if (scene === 'beam') sceneBeam(ctx, w, h, m, p, vertical);
+  }
+
+  /* =========================================================
+     4. 图片背景：把自有素材调进同一套夜色里
+     ========================================================= */
+  function drawImageBg(ctx, img, w, h, m, p, cfg, vertical) {
+    var iw = img.naturalWidth || img.width;
+    var ih = img.naturalHeight || img.height;
     var target = w / h, cur = iw / ih, sx = 0, sy = 0, sw = iw, sh = ih;
     if (cur > target) { sw = ih * target; sx = (iw - sw) / 2; }
     else { sh = iw / target; sy = (ih - sh) / 2; }
     ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
-    if (darken > 0) {
-      ctx.fillStyle = 'rgba(0,0,0,' + darken + ')';
-      ctx.fillRect(0, 0, w, h);
+
+    // 冷调压色：让实拍素材也落进这套墨蓝里
+    ctx.save();
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = '#39426A';
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+
+    ctx.fillStyle = 'rgba(3,5,12,' + Math.max(0, Math.min(0.85, cfg.bg.darken)) + ')';
+    ctx.fillRect(0, 0, w, h);
+
+    // 文字区压暗：中轴构图，上下都要托住字
+    if (cfg.bg.scrim) {
+      var tg = ctx.createLinearGradient(0, 0, 0, h * 0.62);
+      tg.addColorStop(0, 'rgba(3,5,12,0.72)');
+      tg.addColorStop(1, 'rgba(3,5,12,0)');
+      ctx.fillStyle = tg;
+      ctx.fillRect(0, 0, w, h * 0.62);
+      var sg = ctx.createLinearGradient(0, h * 0.55, 0, h);
+      sg.addColorStop(0, 'rgba(3,5,12,0)');
+      sg.addColorStop(1, 'rgba(3,5,12,0.78)');
+      ctx.fillStyle = sg;
+      ctx.fillRect(0, h * 0.55, w, h * 0.45);
     }
-    if (scrim) {
-      var fade = w * 0.62;
-      var lg = ctx.createLinearGradient(0, 0, fade, 0);
-      lg.addColorStop(0, 'rgba(0,0,0,0.85)');
-      lg.addColorStop(0.55, 'rgba(0,0,0,0.55)');
-      lg.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = lg;
-      ctx.fillRect(0, 0, w, h);
+
+    // 标题后方的暖光：图片再暗也要有光源感
+    radial(ctx, m.titleX, m.titleCenterY, Math.max(w, h) * 0.34, [
+      [0, rgba(p.accent, 0.10)],
+      [1, rgba(p.accent, 0)]
+    ]);
+  }
+
+  /* =========================================================
+     5. 排版：页眉 / 标题 / 细分隔 / 副标题 + 印章
+     ========================================================= */
+
+  function drawHeader(ctx, w, h, m, p, cfg, brand) {
+    var s = h * 0.021;
+    if (cfg.kicker && !brand) {
+      var bh = h * 0.0217;
+      ctx.fillStyle = rgba(p.accent, 0.92);
+      ctx.fillRect(m.headerX, m.headerBase - bh, Math.max(2, w * 0.0033), bh);
+      drawTracked(ctx, cfg.kicker, m.headerX + w * 0.0198, m.headerBase, s, s * 0.09,
+        'rgba(226,237,255,0.62)', { weight: 600, align: 'left' });
+    }
+    if (cfg.issue) {
+      var cw = h * 0.082, ch = h * 0.0315;
+      var cx = w - m.headerX - cw, cy = m.headerBase - ch * 0.9;
+      roundRect(ctx, cx, cy, cw, ch, h * 0.0032);
+      ctx.fillStyle = rgba(p.accent, 0.06);
+      ctx.fill();
+      ctx.strokeStyle = rgba(p.accent, 0.40);
+      ctx.lineWidth = Math.max(1, w * 0.0009);
+      ctx.stroke();
+      drawTracked(ctx, cfg.issue, cx + cw / 2, cy + ch * 0.665, h * 0.0151, h * 0.0034,
+        rgba(p.accent, 0.95), { weight: 600, family: MONO });
     }
   }
 
-  /* ---------- 标题块（align: 'center' 竖版居中 / 'left' 横版左对齐） ---------- */
-  function drawTitle(ctx, lines, size, x, y, opts) {
-    var fontFamily = opts.font || FONT_STACK;
-    var align = opts.align || 'center';
-    ctx.font = '900 ' + size + 'px ' + fontFamily;
-    ctx.textAlign = align;
-    ctx.textBaseline = 'middle';
-    ctx.lineJoin = 'round';
-    ctx.miterLimit = 2;
-    var sw = Math.max(2, size / 12);
-    var lh = size * 1.22;
-    var totalH = lh * (lines.length - 1) + size;
-    var top = y - totalH / 2;
-    var widest = 0;
-    for (var i = 0; i < lines.length; i++) widest = Math.max(widest, ctx.measureText(lines[i]).width);
+  /** 白行：冷白 → 淡蓝，靠暗投影托住 */
+  function drawBaseLine(ctx, text, x, baseline, size, p, m, family) {
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.62)';
+    ctx.shadowBlur = size * 0.28;
+    ctx.shadowOffsetY = size * 0.10;
+    var g = ctx.createLinearGradient(0, baseline - size * 0.9, 0, baseline + size * 0.16);
+    g.addColorStop(0.00, p.baseHi);
+    g.addColorStop(0.56, p.base);
+    g.addColorStop(1.00, p.baseLo);
+    drawTracked(ctx, text, x, baseline, size, size * TRACK, g, {
+      align: m.titleAlign, weight: 900, family: family
+    });
+    ctx.restore();
+  }
 
-    // 标题色块（bar）：先画色块，再在其上反色排字
-    if (opts.bar) {
-      var bx = align === 'center' ? x - widest / 2 - size * 0.45 : x - size * 0.45;
-      roundRect(ctx, bx, top - size * 0.30, widest + size * 0.9, totalH + size * 0.6, size * 0.12);
-      ctx.fillStyle = opts.bar;
-      ctx.fill();
+  /** 金行：先糊一层大晕，再叠实体渐变——这是「发光」和「贴一层黄」的区别 */
+  function drawAccentLine(ctx, text, x, baseline, size, p, m, family) {
+    ctx.save();
+    ctx.shadowColor = rgba(p.accent, 0.62);
+    ctx.shadowBlur = size * 0.54;
+    drawTracked(ctx, text, x, baseline, size, size * TRACK, rgba(p.accent, 0.95), {
+      align: m.titleAlign, weight: 900, family: family
+    });
+    ctx.restore();
+
+    ctx.save();
+    ctx.shadowColor = rgba(p.accentLo, 0.5);
+    ctx.shadowBlur = size * 0.12;
+    ctx.shadowOffsetY = size * 0.028;
+    var g = ctx.createLinearGradient(0, baseline - size * 0.92, 0, baseline + size * 0.14);
+    g.addColorStop(0.00, p.accentHi);
+    g.addColorStop(0.38, p.accentMid);
+    g.addColorStop(0.72, p.accent);
+    g.addColorStop(1.00, p.accentLo);
+    drawTracked(ctx, text, x, baseline, size, size * TRACK, g, {
+      align: m.titleAlign, weight: 900, family: family
+    });
+    ctx.restore();
+  }
+
+  function drawTitleBlock(ctx, lines, m, p, cfg) {
+    var n = lines.length;
+    var brand = cfg.layout === 'brand' && !!cfg.kicker && n > 1;
+    var scales = [], i;
+    for (i = 0; i < n; i++) scales.push(brand && i === 0 ? 0.76 : 1);
+
+    var cap = Math.min(m.titleCap, m.blockMaxH / (n * 1.2));
+    var fitted = [];
+    for (i = 0; i < n; i++) fitted.push(fitSize(ctx, lines[i], m.titleMaxW, cap, TRACK));
+    var baseSize = Infinity;
+    for (i = 0; i < n; i++) baseSize = Math.min(baseSize, fitted[i] / scales[i]);
+
+    var sizes = [];
+    for (i = 0; i < n; i++) sizes.push(Math.min(cap, baseSize * scales[i]));
+
+    var maxSize = 0;
+    for (i = 0; i < n; i++) maxSize = Math.max(maxSize, sizes[i]);
+    var lh = maxSize * 1.19;
+    var blockH = (n - 1) * lh + maxSize;
+    var top = m.titleCenterY - blockH / 2;
+
+    // 强调行：默认最后一行
+    var accentIdx = n - 1;
+    var acc = cfg.accentLine || 'last';
+    if (acc === 'first') accentIdx = 0;
+    else if (acc === 'all') accentIdx = -2;   // -2 = 全部
+    else if (acc === 'none') accentIdx = -1;
+
+    var y = top + sizes[0] * 0.86;
+    for (i = 0; i < n; i++) {
+      var isAccent = accentIdx === -2 || i === accentIdx;
+      if (isAccent) drawAccentLine(ctx, lines[i], m.titleX, y, sizes[i], p, m, cfg.font);
+      else drawBaseLine(ctx, lines[i], m.titleX, y, sizes[i], p, m, cfg.font);
+      y += lh;
+    }
+    return {
+      top: top,
+      bottom: top + blockH,
+      size: maxSize
+    };
+  }
+
+  /** 标题与场景之间的细分隔：两段细线夹一枚菱形 */
+  function drawSpine(ctx, w, h, m, p, block) {
+    var y = Math.max(m.ruleY, block.bottom + h * 0.045);
+    if (y > m.gateY - h * 0.07) return;
+    var half = Math.min(w * 0.10, h * 0.09), gap = Math.min(w * 0.0185, h * 0.016);
+    ctx.strokeStyle = rgba(p.accent, 0.26);
+    ctx.lineWidth = 1;
+    line(ctx, w / 2 - half, y, w / 2 - gap, y);
+    line(ctx, w / 2 + gap, y, w / 2 + half, y);
+    ctx.save();
+    ctx.translate(w / 2, y);
+    ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = rgba(p.accent, 0.55);
+    ctx.fillRect(-h * 0.0031, -h * 0.0031, h * 0.0062, h * 0.0062);
+    ctx.restore();
+  }
+
+  function drawStamp(ctx, text, cx, cy, bw, bh, p) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(-3 * Math.PI / 180);
+    var x = -bw / 2, y = -bh / 2;
+
+    ctx.shadowColor = rgba(p.stamp, 0.45);
+    ctx.shadowBlur = bh * 0.34;
+    roundRect(ctx, x, y, bw, bh, bh * 0.09);
+    ctx.fillStyle = rgba(p.stamp, 0.10);
+    ctx.fill();
+    ctx.lineWidth = Math.max(2, bh * 0.033);
+    ctx.strokeStyle = rgba(p.stamp, 0.92);
+    ctx.stroke();
+
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = Math.max(1, bh * 0.011);
+    ctx.strokeStyle = rgba(p.stamp, 0.42);
+    roundRect(ctx, x + bh * 0.078, y + bh * 0.078, bw - bh * 0.156, bh - bh * 0.156, bh * 0.05);
+    ctx.stroke();
+
+    var ts = bh * 0.62;
+    var tw = measureTracked(ctx, text, ts, ts * 0.12, 800);
+    var sc = Math.min(1, (bw - bh * 0.28) / Math.max(1, tw));
+    drawTracked(ctx, text, 0, ts * 0.34, ts * sc, ts * sc * 0.12, rgba(p.stamp, 0.96),
+      { weight: 800, align: 'center' });
+    ctx.restore();
+  }
+
+  function drawCaption(ctx, w, h, m, p, cfg) {
+    var baseSize = h * (m.vertical ? 0.052 : 0.046);
+    var maxW = w * 0.86;
+    var size = baseSize;
+    var subW = 0, gap = 0, dotR = 0, stampH = 0, stampW = 0, total = 0;
+    var hasStamp = !!cfg.stamp;
+
+    // 副标题 + 印章必须整体塞进画幅：先压字号，压到底再舍弃印章
+    function measure(s, withStamp) {
+      subW = cfg.subtitle ? measureTracked(ctx, cfg.subtitle, s, s * 0.045, 800) : 0;
+      gap = s * 0.40;
+      dotR = s * 0.066;
+      stampH = s * 1.22;
+      stampW = stampH * 3.1;
+      total = subW + (withStamp ? gap * 2 + dotR * 2 + stampW : 0);
+    }
+    measure(size, hasStamp);
+    while (size > baseSize * 0.72 && total > maxW) {
+      size -= 2;
+      measure(size, hasStamp);
+    }
+    if (total > maxW && hasStamp) {
+      hasStamp = false;
+      measure(size, false);
+    }
+    while (size > 24 && total > maxW) {
+      size -= 2;
+      measure(size, false);
     }
 
-    // 暖色外发光层：画在描边之下，给纯色标题一点灯箱质感
-    if (opts.glow && !opts.bar) {
+    var x0 = m.subAlign === 'center' ? m.titleX - total / 2 : m.subX;
+    var baseline = m.subBase;
+
+    if (cfg.subtitle) {
       ctx.save();
-      ctx.shadowColor = opts.glow;
-      ctx.shadowBlur = size * 0.40;
-      ctx.fillStyle = opts.title;
-      for (var k = 0; k < lines.length; k++) {
-        ctx.fillText(lines[k], x, top + k * lh + size / 2);
-        ctx.fillText(lines[k], x, top + k * lh + size / 2);
-      }
+      ctx.shadowColor = 'rgba(0,0,0,0.6)';
+      ctx.shadowBlur = size * 0.32;
+      ctx.shadowOffsetY = size * 0.1;
+      drawTracked(ctx, cfg.subtitle, x0, baseline, size, size * 0.045, rgba(p.sub, 0.96),
+        { weight: 800, align: 'left' });
       ctx.restore();
     }
 
-    for (var j = 0; j < lines.length; j++) {
-      var ly = top + j * lh + size / 2;
-      if (opts.bar) {
-        ctx.lineWidth = sw * 0.6;
-        ctx.strokeStyle = opts.bar;
-        ctx.strokeText(lines[j], x, ly);
-        ctx.fillStyle = '#141414';
-        ctx.fillText(lines[j], x, ly);
-      } else {
-        if (opts.shadow) {
-          ctx.shadowColor = 'rgba(0,0,0,0.55)';
-          ctx.shadowBlur = size * 0.18;
-          ctx.shadowOffsetY = size * 0.06;
-        }
-        ctx.lineWidth = sw;
-        ctx.strokeStyle = opts.stroke;
-        ctx.strokeText(lines[j], x, ly);
-        ctx.shadowColor = 'transparent';
-        ctx.shadowBlur = 0;
-        ctx.shadowOffsetY = 0;
-        if (opts.gradient) {
-          var tg = ctx.createLinearGradient(0, top, 0, top + totalH);
-          tg.addColorStop(0, opts.gradient[0]);
-          tg.addColorStop(1, opts.gradient[1]);
-          ctx.fillStyle = tg;
-        } else {
-          ctx.fillStyle = opts.title;
-        }
-        ctx.fillText(lines[j], x, ly);
-      }
+    if (hasStamp) {
+      var dotX = x0 + subW + gap + dotR;
+      var cy = baseline - size * 0.33;
+      ctx.fillStyle = rgba(p.accent, 0.85);
+      ctx.beginPath();
+      ctx.arc(dotX, cy, dotR, 0, Math.PI * 2);
+      ctx.fill();
+      drawStamp(ctx, cfg.stamp, dotX + dotR + gap + stampW / 2, cy, stampW, stampH, p);
     }
   }
 
-  /* leftAlign=true 时 cx 为标签左缘（横版标题左对齐场景）；默认 cx 为标签中心 */
-  function drawTag(ctx, text, cx, cy, size, bg, fg, leftAlign) {
-    ctx.font = '900 ' + size + 'px ' + FONT_STACK;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    var tw = ctx.measureText(text).width;
-    var padX = size * 0.6, padY = size * 0.32;
-    var boxW = tw + padX * 2;
-    if (leftAlign) cx = cx + boxW / 2;
-    roundRect(ctx, cx - boxW / 2, cy - size / 2 - padY, boxW, size + padY * 2, (size + padY * 2) / 2);
-    ctx.fillStyle = bg;
-    ctx.fill();
-    ctx.fillStyle = fg;
-    ctx.fillText(text, cx, cy);
-  }
+  /* =========================================================
+     6. 收尾：压暗 / 颗粒 / 裁切标记
+     ========================================================= */
 
-  function drawSubtitle(ctx, text, x, y, size, color, centered) {
-    ctx.font = '700 ' + size + 'px ' + FONT_STACK;
-    ctx.textAlign = centered ? 'center' : 'left';
-    ctx.textBaseline = 'middle';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = Math.max(2, size / 14);
-    ctx.strokeStyle = 'rgba(0,0,0,0.9)';
-    ctx.strokeText(text, x, y);
-    ctx.fillStyle = color;
-    ctx.fillText(text, x, y);
-  }
+  function drawFinish(ctx, w, h, m) {
+    // 底部压暗：给副标题一块干净的底
+    var sg = ctx.createLinearGradient(0, h * 0.78, 0, h);
+    sg.addColorStop(0, 'rgba(3,5,12,0)');
+    sg.addColorStop(0.45, 'rgba(3,5,12,0.42)');
+    sg.addColorStop(1, 'rgba(3,5,12,0.74)');
+    ctx.fillStyle = sg;
+    ctx.fillRect(0, h * 0.78, w, h * 0.22);
 
-  /* ---------- 系列标识（顶部小字，建立系列认知） ---------- */
-  function drawKicker(ctx, text, x, y, size, color, align) {
-    ctx.font = '700 ' + size + 'px ' + FONT_STACK;
-    ctx.textAlign = align || 'left';
-    ctx.textBaseline = 'middle';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = Math.max(2, size / 8);
-    ctx.strokeStyle = 'rgba(0,0,0,0.88)';
-    ctx.strokeText(text, x, y);
-    ctx.fillStyle = color;
-    ctx.fillText(text, x, y);
-  }
+    // 暗角
+    var vg = ctx.createRadialGradient(w / 2, h * 0.46, Math.min(w, h) * 0.20, w / 2, h * 0.5, Math.max(w, h) * 0.86);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(0.62, 'rgba(0,0,0,0.16)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.70)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, w, h);
 
-  /* ---------- 大数字徽章（高点击核心锚点：一个数字/短词 + 可选小字说明） ---------- */
-  function drawBadge(ctx, b, cx, cy, size, o) {
-    var font = (o && o.font) || FONT_STACK;
-    var capSize = size * 0.30;
-    ctx.font = '900 ' + size + 'px ' + font;
-    var tw = ctx.measureText(b.text).width;
-    var cw = 0;
-    if (b.caption) { ctx.font = '700 ' + capSize + 'px ' + font; cw = ctx.measureText(b.caption).width; }
-    var innerW = Math.max(tw, cw);
-    var padX = size * 0.44, padY = size * 0.26;
-    var boxW = innerW + padX * 2;
-    var boxH = size + (b.caption ? capSize * 1.40 : 0) + padY * 2;
-    var bx = cx - boxW / 2, by = cy - boxH / 2, rad = boxH * 0.16;
-
-    /* 投影 + 色块 */
+    // 胶片颗粒：把「渐变」变成「材质」
+    var nz = document.createElement('canvas');
+    nz.width = nz.height = 256;
+    var nx = nz.getContext('2d');
+    var img = nx.createImageData(256, 256);
+    for (var i = 0; i < img.data.length; i += 4) {
+      var v = 110 + Math.random() * 145;
+      img.data[i] = v; img.data[i + 1] = v; img.data[i + 2] = v; img.data[i + 3] = 255;
+    }
+    nx.putImageData(img, 0, 0);
     ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.50)';
-    ctx.shadowBlur = size * 0.32;
-    ctx.shadowOffsetY = size * 0.09;
-    roundRect(ctx, bx, by, boxW, boxH, rad);
-    if (b.gradient) {
-      var bgr = ctx.createLinearGradient(0, by, 0, by + boxH);
-      bgr.addColorStop(0, b.gradient[0]);
-      bgr.addColorStop(1, b.gradient[1]);
-      ctx.fillStyle = bgr;
-    } else {
-      ctx.fillStyle = b.color;
-    }
-    ctx.fill();
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.globalAlpha = 0.05;
+    ctx.fillStyle = ctx.createPattern(nz, 'repeat');
+    ctx.fillRect(0, 0, w, h);
     ctx.restore();
 
-    /* 顶部内高光：让色块从平面变成有厚度的实体 */
-    if (b.gradient) {
-      var hl = ctx.createLinearGradient(0, by, 0, by + boxH * 0.45);
-      hl.addColorStop(0, 'rgba(255,255,255,0.22)');
-      hl.addColorStop(1, 'rgba(255,255,255,0)');
-      roundRect(ctx, bx, by, boxW, boxH, rad);
-      ctx.fillStyle = hl;
-      ctx.fill();
+    // 四角裁切标记
+    var mm = Math.min(w, h) * 0.048;
+    var L = Math.min(w, h) * 0.022;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.13)';
+    ctx.lineWidth = Math.max(1, Math.min(w, h) * 0.0013);
+    var corners = [[mm, mm, 1, 1], [w - mm, mm, -1, 1], [mm, h - mm, 1, -1], [w - mm, h - mm, -1, -1]];
+    for (var c = 0; c < corners.length; c++) {
+      var q = corners[c];
+      ctx.beginPath();
+      ctx.moveTo(q[0] + q[2] * L, q[1]);
+      ctx.lineTo(q[0], q[1]);
+      ctx.lineTo(q[0], q[1] + q[3] * L);
+      ctx.stroke();
     }
-
-    /* 深色描边：保证压在任何背景上都立得住 */
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = Math.max(3, size * 0.05);
-    ctx.strokeStyle = b.stroke || 'rgba(0,0,0,0.55)';
-    roundRect(ctx, bx, by, boxW, boxH, rad);
-    ctx.stroke();
-
-    /* 文字 */
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    var ty = cy - (b.caption ? capSize * 0.66 : 0);
-    ctx.font = '900 ' + size + 'px ' + font;
-    ctx.fillStyle = b.textColor;
-    ctx.fillText(b.text, cx, ty);
-    if (b.caption) {
-      ctx.font = '700 ' + capSize + 'px ' + font;
-      ctx.fillStyle = b.captionColor || b.textColor;
-      ctx.fillText(b.caption, cx, ty + size * 0.74);
-    }
+    ctx.restore();
   }
 
-  /* ---------- 主入口 ---------- */
+  /* =========================================================
+     7. 主入口
+     ========================================================= */
   window.renderCover = function (config) {
     var cfg = {
       title: (config && config.title) || '',
       subtitle: (config && config.subtitle) || '',
-      tag: (config && config.tag) || '',
       kicker: (config && config.kicker) || '',
-      badge: Object.assign(
-        { text: '', caption: '', color: '#FF3B30', textColor: '#FFFFFF', captionColor: '', stroke: '', y: 0, scale: 1 },
-        (config && config.badge) || {}
-      ),
+      issue: (config && config.issue) || '',
+      stamp: (config && config.stamp) || (config && config.tag) || '',
+      note: (config && config.note) || '',
+      scene: (config && config.scene) || 'threshold',
+      layout: (config && config.layout) || 'title',
+      accentLine: (config && config.accentLine) || 'last',
       ratio: (config && config.ratio) || '3:4',
       size: (config && config.size) || null,
-      layout: (config && config.layout) || 'title',
-      kickerScale: num(config && config.kickerScale, 1),
-      titleScale: num(config && config.titleScale, 1),
-      tagScale: num(config && config.tagScale, 1),
-      bg: Object.assign({ type: 'gradient', src: '', darken: 0.25, scrim: true, style: 'grid' }, config && config.bg),
-      colors: Object.assign({ title: '#FFD400', stroke: '#141414', subtitle: '#FFFFFF', tag: '#FF3B30', tagText: '#FFFFFF' }, config && config.colors),
-      bar: (config && config.bar) || '',
-      shadow: config && config.shadow === undefined ? true : config.shadow,
-      fx: (config && config.fx) || '',
-      font: (config && config.font) || ''
+      font: (config && config.font) || '',
+      colors: Object.assign({
+        title: '#FFC53D',
+        base: '#F2F6FF',
+        subtitle: '#E9F0FF',
+        tag: '#FF5A3C'
+      }, (config && config.colors) || {}),
+      bg: Object.assign({
+        type: 'gradient',
+        src: '',
+        darken: 0.35,
+        scrim: true
+      }, (config && config.bg) || {})
     };
 
     var size = cfg.size || RATIOS[cfg.ratio] || RATIOS['3:4'];
@@ -445,95 +1002,27 @@
     var ctx = canvas.getContext('2d');
 
     function paint(bgImg) {
+      var p = palette(cfg);
+      var m = metrics(w, h, vertical);
       ctx.clearRect(0, 0, w, h);
+
       if (bgImg) {
-        drawImageBg(ctx, bgImg, w, h, cfg.bg.darken, cfg.bg.scrim && !vertical);
+        drawImageBg(ctx, bgImg, w, h, m, p, cfg, vertical);
       } else {
-        drawProceduralBg(ctx, w, h, cfg.bg.style || 'grid');
+        drawScene(ctx, w, h, m, p, cfg, vertical);
       }
 
-      /* 品牌优先版式：系列标识当主角、片名钩子降一档（有 kicker 时才生效） */
       var brand = cfg.layout === 'brand' && !!cfg.kicker;
-      var fontFamily = cfg.font || FONT_STACK;
+      // 9 字以内单行（字号仍能撑满宽度）；10 字以上自动折两行，避免字被压小
+      var lines = wrapTitle(cfg.title, 9, 2);
+      if (!lines.length) lines = [' '];
+      if (brand) lines = [cfg.kicker].concat(lines).slice(0, 3);
 
-      // 折行 + 自适应字号
-      var lines = wrapTitle(cfg.title, 12, 2);
-      var kickerLines = brand ? wrapTitle(cfg.kicker, 12, 2) : null;
-      // 横版标题栏宽度：画布越"方"（4:3 比 16:9 窄）标题栏越宽，避免 4:3 下字号被压太小
-      var aspect = w / h;
-      var squash = Math.max(0, Math.min(1, (16 / 9 - aspect) / (16 / 9 - 4 / 3)));
-      var maxWidth = vertical ? w * (brand ? 0.90 : 0.86) : w * (0.46 + squash * 0.06);
-      var maxSize = vertical ? h * 0.115 : h * 0.16;
-      var kickerSize = 0;
-      var fontSize;
-
-      if (brand) {
-        // 先定品牌行字号（占满标题栏），片名再按品牌行的固定比例降档——
-        // 这样无论片名是 6 字还是 12 字，主次关系都不会反转
-        kickerSize = fitTitle(ctx, kickerLines, fontFamily, maxWidth, h * 0.098 * cfg.kickerScale, 30);
-        fontSize = fitTitle(ctx, lines, fontFamily, maxWidth, kickerSize * 0.72 * cfg.titleScale, 30);
-      } else {
-        fontSize = fitTitle(ctx, lines, fontFamily, maxWidth, maxSize * cfg.titleScale, 30);
-      }
-
-      /* 质感预设（可选）：只影响标题/徽章的材质，不改变构图与配色口径 */
-      var FX_PRESETS = {
-        gold: {
-          title: ['#FFE45C', '#FFC400'],
-          glow: 'rgba(255,170,0,0.40)',
-          badge: ['#FF6242', '#D31100']
-        },
-        red: {
-          title: null,
-          glow: '',
-          badge: ['#FF6242', '#D31100']
-        }
-      };
-      var FX = FX_PRESETS[cfg.fx] || null;
-
-      // 品牌优先：品牌行穿主标题样式（亮色+描边+投影），片名降为白色副行、去掉投影
-      var kickerStyle = {
-        font: cfg.font, title: cfg.colors.title, stroke: cfg.colors.stroke,
-        bar: '', shadow: cfg.shadow, align: vertical ? 'center' : 'left',
-        gradient: FX ? FX.title : null, glow: FX ? FX.glow : ''
-      };
-      var titleStyle = {
-        font: cfg.font, title: brand ? cfg.colors.subtitle : cfg.colors.title,
-        stroke: cfg.colors.stroke, bar: cfg.bar,
-        shadow: brand ? false : cfg.shadow, align: vertical ? 'center' : 'left',
-        gradient: brand || !FX ? null : FX.title, glow: brand || !FX ? '' : FX.glow
-      };
-      var badgeCfg = FX
-        ? Object.assign({}, cfg.badge, { gradient: FX.badge })
-        : cfg.badge;
-
-      if (vertical) {
-        // 竖版：系列标识顶部 / 标题上半区居中 / 标签中部 / 大数字徽章中下 / 副标题底部
-        if (brand) {
-          // 品牌优先：品牌行下移占住原片名重心，片名钩子紧随其下（竖版用得最多，重心宁可偏上）
-          drawTitle(ctx, kickerLines, kickerSize, w / 2, h * 0.215, kickerStyle);
-          drawTitle(ctx, lines, fontSize, w / 2, h * 0.405, titleStyle);
-        } else {
-          if (cfg.kicker) drawKicker(ctx, cfg.kicker, w / 2, h * 0.060, h * 0.026, cfg.colors.subtitle, 'center');
-          drawTitle(ctx, lines, fontSize, w / 2, h * 0.30, titleStyle);
-        }
-        if (cfg.tag) drawTag(ctx, cfg.tag, w / 2, h * 0.545, h * 0.066 * cfg.tagScale, cfg.colors.tag, cfg.colors.tagText);
-        if (cfg.badge.text) drawBadge(ctx, badgeCfg, w / 2, h * (cfg.badge.y || 0.705), h * 0.105 * (cfg.badge.scale || 1), { font: cfg.font });
-        if (cfg.subtitle) drawSubtitle(ctx, cfg.subtitle, w / 2, h * 0.885, h * 0.036, cfg.colors.subtitle, true);
-      } else {
-        // 横版：标识左上 / 标题左侧 / 标签标题上方 / 大数字徽章右侧 / 副标题标题下方
-        if (brand) {
-          // 品牌优先：左栏四段（标签/品牌/片名/副标题）自上而下匀开，避免下半幅留空
-          drawTitle(ctx, kickerLines, kickerSize, w * 0.06, h * 0.365, kickerStyle);
-          drawTitle(ctx, lines, fontSize, w * 0.06, h * 0.605, titleStyle);
-        } else {
-          if (cfg.kicker) drawKicker(ctx, cfg.kicker, w * 0.06, h * 0.115, h * 0.026, cfg.colors.subtitle, 'left');
-          drawTitle(ctx, lines, fontSize, w * 0.06, h * 0.46, titleStyle);
-        }
-        if (cfg.tag) drawTag(ctx, cfg.tag, w * 0.06, h * 0.225, h * 0.066 * cfg.tagScale, cfg.colors.tag, cfg.colors.tagText, true);
-        if (cfg.badge.text) drawBadge(ctx, badgeCfg, w * (cfg.badge.x || 0.775), h * (cfg.badge.y || 0.50), h * 0.115 * (cfg.badge.scale || 1), { font: cfg.font });
-        if (cfg.subtitle) drawSubtitle(ctx, cfg.subtitle, w * 0.06, h * (brand ? 0.805 : 0.78), h * 0.036, cfg.colors.subtitle, false);
-      }
+      drawHeader(ctx, w, h, m, p, cfg, brand);
+      var block = drawTitleBlock(ctx, lines, m, p, cfg);
+      drawSpine(ctx, w, h, m, p, block);
+      drawCaption(ctx, w, h, m, p, cfg);
+      drawFinish(ctx, w, h, m);
     }
 
     if (cfg.bg.type === 'image' && cfg.bg.src) {

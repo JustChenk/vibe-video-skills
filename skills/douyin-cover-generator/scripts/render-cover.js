@@ -1,16 +1,14 @@
 #!/usr/bin/env node
 'use strict';
 /* =========================================================
- * render-cover.js — 抖音封面渲染 CLI（HTML+Canvas → PNG）
- * douyin-cover-generator skill 配套，与视频管线 render.js 同栈同依赖。
+ * render-cover.js — 封面渲染 CLI（HTML+Canvas → PNG）
+ * douyin-cover-generator skill v2「夜场光场」配套，与视频管线 render.js 同栈同依赖。
  *
  * 用法:
- *   node render-cover.js --title "别再踩这5个坑" --subtitle "90%的人中招" --tag "避坑" \
- *     --ratio 3:4 --style dazibao --out 封面_竖版3x4.png
- *   node render-cover.js --title "..." --ratio 4:3 --bg frame.png --darken 0.25 --out 封面_横版4x3.png
- *   # 系列名当主角（片名自动降一档）:
- *   node render-cover.js --title "687条建议\n只算四笔账" --kicker "人生高性价比指南" \
- *     --layout brand --ratio 3:4 --style dazibao --out 封面_竖版3x4.png
+ *   node render-cover.js --title $'十二条路\n门槛写死了' --subtitle "18 岁之后" \
+ *     --stamp "期限作废" --kicker "人生高性价比指南" --issue "EP.31" \
+ *     --scene threshold --ratio 3:4 --out 封面_竖版3x4.png
+ *   node render-cover.js --title "..." --ratio 4:3 --bg frame.png --scene plain --out 封面_横版4x3.png
  *
  * 默认比例: 竖版 3:4（1080x1440）; 横版 4:3（1920x1440）
  * 可选比例: 3:4 / 4:3 / 9:16 / 16:9 / 1:1 / 自定义 --size WxH
@@ -91,17 +89,24 @@ function loadPlaywright() {
   process.exit(1);
 }
 
+/* ---------- 场景名归一：新名 + 旧 --style 名都认 ---------- */
+const SCENES = {
+  threshold: 'threshold', dazibao: 'threshold',
+  orbit: 'orbit', glow: 'orbit',
+  beam: 'beam', rays: 'beam',
+  plain: 'plain', grid: 'plain'
+};
+
 /* ---------- 参数 → 配置 ----------
  * 优先级：CLI 显式参数 > --config 文件值 > 内置默认值。
- * 默认值必须从 --config 文件里取，否则 CLI 的默认值会把文件里的
- * colors / bg / badge / tagScale 全吃掉（历史 bug，2026-10-18 修）。
+ * v2 换掉了 v1 的部分视觉参数（bar/fx/badge 块），旧参数会被忽略并提示，
+ * 但 --tag / --title-color / --style 这类能自然映射的仍然兼容。
  */
 function buildConfig() {
   const cfgFile = arg('--config', '');
   const base = cfgFile ? JSON.parse(fs.readFileSync(cfgFile, 'utf8')) : {};
   const baseBg = base.bg || {};
   const baseColors = base.colors || {};
-  const baseBadge = base.badge || {};
   const d = (v, fallback) => (v === undefined || v === null ? fallback : v);
 
   const ratio = arg('--ratio', d(base.ratio, '3:4'));
@@ -119,48 +124,48 @@ function buildConfig() {
   }
 
   const cliBg = arg('--bg', '');
-  const darken = parseFloat(arg('--darken', String(d(baseBg.darken, 0.25))));
+  const darken = parseFloat(arg('--darken', String(d(baseBg.darken, 0.35))));
   let bg;
   if (cliBg) {
     bg = { type: 'image', src: pathToFileURL(path.resolve(cliBg)).href, darken, scrim: !hasFlag('--no-scrim') };
   } else if (baseBg.type === 'image' && baseBg.src) {
     bg = { type: 'image', src: baseBg.src, darken, scrim: hasFlag('--no-scrim') ? false : baseBg.scrim !== false };
   } else {
-    bg = { type: 'gradient', style: arg('--style', d(baseBg.style, 'grid')) };
+    bg = { type: 'gradient', src: '', darken, scrim: true };
   }
+
+  /* 旧参数映射：能对上的直接接过来，对不上的收集起来提示一次 */
+  const sceneRaw = arg('--scene', arg('--style', d(base.scene, 'threshold')));
+  const issueRaw = arg('--issue', d(base.issue, ''));
+  const badgeRaw = arg('--badge', '');
+  const ignoreFlags = [];
+  ['--bar-color', '--stroke-color', '--fx', '--no-shadow', '--title-scale',
+    '--kicker-scale', '--tag-scale', '--badge-caption', '--badge-y', '--badge-scale',
+    '--badge-caption-color'].forEach((f) => { if (hasFlag(f) || arg(f, '')) ignoreFlags.push(f); });
 
   return {
     title: arg('--title', d(base.title, '')),
     subtitle: arg('--subtitle', d(base.subtitle, '')),
-    tag: arg('--tag', d(base.tag, '')),
-    tagScale: parseFloat(arg('--tag-scale', String(d(base.tagScale, 1)))),
     kicker: arg('--kicker', d(base.kicker, '')),
-    badge: {
-      text: arg('--badge', d(baseBadge.text, '')),
-      caption: arg('--badge-caption', d(baseBadge.caption, '')),
-      color: arg('--badge-color', d(baseBadge.color, '#FF3B30')),
-      textColor: arg('--badge-text-color', d(baseBadge.textColor, '#FFFFFF')),
-      captionColor: arg('--badge-caption-color', d(baseBadge.captionColor, '')),
-      y: parseFloat(arg('--badge-y', String(d(baseBadge.y, 0)))),
-      scale: parseFloat(arg('--badge-scale', String(d(baseBadge.scale, 1))))
-    },
+    issue: issueRaw || (badgeRaw ? (/^\d+$/.test(badgeRaw) ? 'EP.' + badgeRaw : badgeRaw) : ''),
+    stamp: arg('--stamp', arg('--tag', d(base.stamp, d(base.tag, '')))),
+    note: arg('--note', d(base.note, '')),
+    scene: SCENES[String(sceneRaw).toLowerCase()] || 'threshold',
+    sceneRaw,
+    layout: arg('--layout', d(base.layout, 'title')),
+    accentLine: arg('--accent-line', d(base.accentLine, 'last')),
     ratio,
     size,
-    layout: arg('--layout', d(base.layout, 'title')),
-    kickerScale: parseFloat(arg('--kicker-scale', String(d(base.kickerScale, 1)))),
-    titleScale: parseFloat(arg('--title-scale', String(d(base.titleScale, 1)))),
     bg,
     colors: {
-      title: arg('--title-color', d(baseColors.title, '#FFD400')),
-      stroke: arg('--stroke-color', d(baseColors.stroke, '#141414')),
-      subtitle: arg('--subtitle-color', d(baseColors.subtitle, '#FFFFFF')),
-      tag: arg('--tag-color', d(baseColors.tag, '#FF3B30')),
-      tagText: arg('--tag-text-color', d(baseColors.tagText, '#FFFFFF'))
+      title: arg('--accent-color', arg('--title-color', d(baseColors.title, '#FFC53D'))),
+      base: arg('--base-color', d(baseColors.base, '#F2F6FF')),
+      subtitle: arg('--subtitle-color', d(baseColors.subtitle, '#E9F0FF')),
+      tag: arg('--stamp-color', arg('--tag-color', d(baseColors.tag, '#FF5A3C')))
     },
-    bar: arg('--bar-color', d(base.bar, '')),
-    fx: arg('--fx', d(base.fx, '')),
-    shadow: hasFlag('--no-shadow') ? false : d(base.shadow, true),
-    font: arg('--font', d(base.font, ''))
+    font: arg('--font', d(base.font, '')),
+    _ignore: ignoreFlags,
+    _badgeIgnored: !!badgeRaw
   };
 }
 
@@ -168,11 +173,34 @@ function buildConfig() {
   const cfg = buildConfig();
   const OUT = arg('--out', '');
   if (!cfg.title) { console.error('缺少 --title（主标题必填）'); process.exit(1); }
-  if (['title', 'brand'].indexOf(cfg.layout) < 0) { console.error('--layout 只能是 title（片名当主角）或 brand（系列标识当主角）'); process.exit(1); }
-  if (cfg.layout === 'brand' && !cfg.kicker) { console.error('--layout brand 需要同时给 --kicker（系列标识），否则没有主角可放'); process.exit(1); }
+  if (['title', 'brand'].indexOf(cfg.layout) < 0) {
+    console.error('--layout 只能是 title（片名当主角）或 brand（系列名入标题块首行）');
+    process.exit(1);
+  }
+  if (cfg.layout === 'brand' && !cfg.kicker) {
+    console.error('--layout brand 需要同时给 --kicker（系列标识），否则标题块首行是空的');
+    process.exit(1);
+  }
+  if (['last', 'first', 'all', 'none'].indexOf(cfg.accentLine) < 0) {
+    console.error('--accent-line 只能是 last / first / all / none');
+    process.exit(1);
+  }
   if (!OUT) { console.error('缺少 --out（输出路径必填）'); process.exit(1); }
   if (cfg.bg.type === 'image' && !fs.existsSync(arg('--bg', ''))) {
-    console.error('背景图不存在: ' + arg('--bg', '')); process.exit(1);
+    console.error('背景图不存在: ' + arg('--bg', ''));
+    process.exit(1);
+  }
+  if (cfg.sceneRaw && !SCENES[String(cfg.sceneRaw).toLowerCase()]) {
+    console.error('--scene 只能是 threshold / orbit / beam / plain');
+    process.exit(1);
+  }
+  if (cfg.stamp && cfg.stamp.length > 6) {
+    console.warn('[render-cover] 印章文字 ' + cfg.stamp.length + ' 字偏长，印章会缩小字号，建议压到 4 字');
+  }
+  if (cfg._ignore.length || cfg._badgeIgnored) {
+    const used = cfg._ignore.filter((f) => f !== '--badge-y' && f !== '--badge-scale' && f !== '--badge-caption' && f !== '--badge-caption-color');
+    if (used.length) console.warn('[render-cover] v2 已移除这些 v1 视觉参数，本次忽略: ' + used.join(' '));
+    if (cfg._badgeIgnored) console.warn('[render-cover] --badge 已改为 EP 徽标（--issue），数字会自动加 EP. 前缀');
   }
 
   const size = cfg.size || {
@@ -199,11 +227,15 @@ function buildConfig() {
   await page.goto('file://' + path.resolve(html));
   await page.evaluate(async () => { await document.fonts.ready; });
 
-  await page.evaluate((c) => window.renderCover(c), cfg);
+  const payload = Object.assign({}, cfg);
+  delete payload._ignore;
+  delete payload._badgeIgnored;
+  delete payload.sceneRaw;
+  await page.evaluate((c) => window.renderCover(c), payload);
 
   const outDir = path.dirname(path.resolve(OUT));
   fs.mkdirSync(outDir, { recursive: true });
   await page.screenshot({ path: OUT, type: 'png', clip: { x: 0, y: 0, width: w, height: h } });
   await browser.close();
-  console.log(`[render-cover] 已生成 ${OUT} (${w}x${h})`);
+  console.log(`[render-cover] 已生成 ${OUT} (${w}x${h}) · scene=${cfg.scene} · accent=${cfg.colors.title}`);
 })().catch((e) => { console.error('[render-cover] 失败:', e.message); process.exit(1); });
