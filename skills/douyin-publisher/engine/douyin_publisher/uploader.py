@@ -116,30 +116,44 @@ def fill_title(page, title: str):
     return True
 
 
-def _find_topic_item(page, name, timeout=4.0):
-    """在 # 联想浮层里找名字完全一致的话题项。
+def _topic_items(page):
+    """用 JS 直接读下拉里的话题名列表，杜绝 Playwright 的元素等待。
 
-    选择器用 [class*=tag-hash]：抖音的 class 带构建哈希（tag-dVUDkJ tag-hash-o0tpyE），
-    但 tag-hash 这个语义前缀稳定；容器 .mention-suggest-item-container 不含它，避免误点整列。
+    2026-10-24 计时实测：同一个话题名，`inner_text()` 在下拉刚弹出时可阻塞 25.8s
+    （默认超时 30s）并最终判定未命中；换成纯 DOM 读取后耗时 < 50ms。
     """
+    try:
+        return page.evaluate("""() => {
+            const out = [];
+            for (const el of document.querySelectorAll(
+                    "[class*='mention-suggest'] [class*='tag-hash']")) {
+                const t = (el.innerText || '').split('\\n')[0].trim();
+                if (t) out.push(t.replace(/^#+/, '').trim());
+            }
+            return out;
+        }""")
+    except Exception:
+        return []
+
+
+def _topic_panel_open(page):
+    try:
+        return page.evaluate(
+            """() => document.querySelectorAll("[class*='mention-suggest']").length > 0"""
+        )
+    except Exception:
+        return False
+
+
+def _find_topic_item(page, name, timeout=4.0):
+    """等下拉出现目标话题（用 JS 轮询，不依赖 locator 等待）。返回序号，找不到返回 -1。"""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        items = page.locator("[class*='mention-suggest'] [class*='tag-hash']")
-        try:
-            count = items.count()
-        except Exception:
-            count = 0
-        for i in range(count):
-            it = items.nth(i)
-            try:
-                text = it.inner_text()
-            except Exception:
-                continue
-            head = (text.splitlines()[0] if text else "").strip().lstrip("#").strip()
-            if head == name:
-                return it
-        time.sleep(0.2)
-    return None
+        names = _topic_items(page)
+        if name in names:
+            return names.index(name)
+        time.sleep(0.25)
+    return -1
 
 
 def insert_topic(page, name):
@@ -147,21 +161,37 @@ def insert_topic(page, name):
 
     点选后的节点结构：<div data-mention="#">…<span>#话题</span>…</div>，
     与纯键盘输入的 #文本 不同，是平台认可的话题实体。
+
+    2026-10-24 事故定论（计时证据）：
+      - 症状：某个话题「找项」耗时 25.8s 且未命中，整批像卡死；
+      - 真因：`inner_text()` 默认 30s 超时，下拉重建时节点失效被无限重试；
+      - 修法：JS 直读 DOM 文本判位 → 用空格确认（高亮项），全程不点元素、不读元素。
+    顺序：目标在第 1 位直接空格；在第 k 位先下移 k 次再空格；都失败才退化纯文本。
+    单话题 12s 硬预算，绝不拖死整批。
     """
+    t0 = time.time()
     page.keyboard.type("#" + name)
-    item = _find_topic_item(page, name)
-    if item is not None:
+    pos = _find_topic_item(page, name, timeout=5.0)
+    t1 = time.time()
+    print(f"    [话题计时] #{name} 打字0.0s 找项{t1 - t0:.1f}s "
+          f"{'命中@' + str(pos) if pos >= 0 else '未命中'}")
+    if pos >= 0:
         try:
-            # 点左侧名字区域，避开右侧热度文字
-            item.click(position={"x": 18, "y": 8})
-            time.sleep(0.35)
-            return True
+            for _ in range(pos):
+                page.keyboard.press("ArrowDown")
+                time.sleep(0.15)
+            page.keyboard.press("Space")
+            time.sleep(0.45)
+            if not _topic_panel_open(page):
+                print(f"    [话题] #{name} 用Space选中")
+                return True
         except Exception:
             pass
     page.keyboard.press("Escape")
     time.sleep(0.15)
     page.keyboard.press("Space")
     time.sleep(0.2)
+    print(f"    [话题] #{name} 未命中实体（{time.time() - t0:.1f}s），退化为纯文本")
     return False
 
 
@@ -250,6 +280,234 @@ def _click_cover_entry(page, mode="vertical", timeout=10):
         except Exception:
             pass
         page.wait_for_timeout(500)
+    return False
+
+
+def _hot_rows(page, limit=60):
+    """抓「关联热点」下拉里的条目：以「N万在看」为锚点，向上找整行，返回 [(row, text)]。
+
+    抖音这个下拉没有稳定 class（构建哈希会变），但「万在看」这三个字是文案，稳定。
+    行结构：缩略图 + 标题 + 热度，热度文字与标题在同一行的不同列。
+    """
+    rows, seen = [], set()
+    anchors = page.get_by_text("万在看", exact=False)
+    try:
+        n = min(anchors.count(), limit)
+    except Exception:
+        n = 0
+    for i in range(n):
+        el = anchors.nth(i)
+        for depth in (2, 3, 1):
+            try:
+                row = el.locator(f"xpath=ancestor::div[{depth}]")
+                txt = row.inner_text().strip().replace("\n", " ")
+            except Exception:
+                continue
+            if not txt or "万在看" not in txt or len(txt) > 120:
+                continue
+            key = txt.split("万在看")[0][-40:]
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append((row, txt))
+            break
+    return rows
+
+
+def set_hot_topic(page, keywords, idx=0):
+    """关联热点：点开下拉 → 抓全部条目 → 按关键词优先级命中第一条 → 点选。
+
+    keywords 支持字符串或字符串列表（按优先级）。榜单是实时的（每小时滚动），
+    命中不了就只落盘清单、不硬凑——乱绑无关热点比不绑更伤推荐。
+    全程不阻断发布，异常由调用方兜住。
+    """
+    if isinstance(keywords, str):
+        keywords = [keywords]
+    keywords = [k.strip() for k in keywords if k and k.strip()]
+    if not keywords:
+        return False
+
+    row_label = page.get_by_text("关联热点", exact=False).first
+    if row_label.count() == 0:
+        print("  [热点] 页面上找不到「关联热点」，跳过")
+        return False
+
+    # 这一栏是 Semi Design 的可搜索下拉（div.semi-select-filterable，占位「点击输入热点词」）。
+    # label 与控件在栅格里是两列，且 .semi-select 在合集选择器上也有，必须限定到本区块。
+    try:
+        block = row_label.locator(
+            "xpath=ancestor::div[contains(@class,'content-obt4oA')]"
+        ).first
+        box = block.locator("div.semi-select").first
+        box.click()
+    except Exception as e:
+        print(f"  [热点] 打不开热点下拉: {e}")
+        return False
+    time.sleep(2.0)
+    shot(page, f"hot_open_{idx}")
+
+    def _opts():
+        out = []
+        try:
+            loc = page.locator("div.semi-select-option")
+            for i in range(min(loc.count(), 60)):
+                el = loc.nth(i)
+                try:
+                    if not el.is_visible():
+                        continue
+                    t = el.inner_text().strip().replace("\n", " ")
+                    if t:
+                        out.append((el, t))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return out
+
+    rows = _opts()
+
+    # 默认榜只按「在看」排序，可能不含我们要的词；逐个关键词在搜索框里试一遍。
+    # Semi 的可搜索下拉：输入即过滤，输入框在下拉容器内。
+    # 策略：所有关键词都试完，汇总候选后按「在看」取最热的一条（用户口径：同领域挑热度最高的）。
+    tried = [("默认榜", rows)]
+
+    def _heat(txt):
+        m = re.search(r"([\d.]+)\s*万在看", txt)
+        return float(m.group(1)) if m else 0.0
+
+    def _denied(txt):
+        return any(w in txt for w in config.HOT_DENY)
+
+    pool = []
+    for kw in keywords:
+        try:
+            inp = block.locator("input").first
+            inp.click()
+            inp.fill("")
+            time.sleep(0.4)
+            inp.fill(kw)
+            time.sleep(1.8)
+        except Exception as e:
+            print(f"  [热点] 搜索「{kw}」失败: {e}")
+            continue
+        opts = _opts()
+        tried.append((kw, opts))
+        for pos, (el, txt) in enumerate(opts):
+            if kw in txt:
+                pool.append((pos, txt, kw, _heat(txt)))
+    # 默认榜只作日志留档，不参与候选：它按「在看」排序，会把完全无关的大热点顶进来
+    # （实测：「vibe知识大赏」搜索时，默认榜的 Kimi 1031 万把目标挤掉了）。
+
+    dump = LOGS / f"hot_list_{idx}.txt"
+    with open(dump, "w", encoding="utf-8") as f:
+        f.write(f"抓取时间: {datetime.now():%Y-%m-%d %H:%M:%S}\n")
+        f.write(f"关键词: {keywords}\n\n")
+        for tag, rs in tried:
+            f.write(f"--- {tag}：{len(rs)} 条 ---\n")
+            for i, (_, txt) in enumerate(rs[:25], 1):
+                mark = " [黑名单]" if _denied(txt) else ""
+                f.write(f"[{i:02d}] {txt}{mark}\n")
+            f.write("\n")
+    print(f"  热点候选已存 {dump.name}（搜索 {len(tried) - 1} 组）")
+
+    # 去重 + 过黑名单 + 排序。排序键：关键词优先级 > 热度。
+    # ——因为「随便挑个热度高的」也不能让泛词条目把指定活动/话题挤掉（实测「vibe知识大赏」被
+    #   「高中知识点vibe一下全懂了」按 0.4 万热度差挤掉）。
+    # 注意：这里只留「干净标题」，不留元素引用——多轮搜索之间 DOM 会重渲染，旧 locator 会失效。
+    def _clean(txt):
+        t = re.sub(r"[\d.]+\s*万在看", "", txt).strip()
+        return re.sub(r"\s+[\d.]+\s*$", "", t).strip()
+
+    def _prio(kw):
+        return keywords.index(kw) if kw in keywords else len(keywords)
+
+    cands, seen = [], set()
+    for pos, txt, kw, heat in sorted(pool, key=lambda x: (_prio(x[2]), -x[3])):
+        title = _clean(txt)
+        if not title or title in seen:
+            continue
+        seen.add(title)
+        if _denied(txt):
+            print(f"  [热点] 拦截黑名单条目: {txt[:30]}")
+            continue
+        cands.append((title, heat, kw, pos))
+
+    if not cands:
+        print("  [热点] 没有可用条目，本条不关联热点")
+        page.keyboard.press("Escape")
+        return False
+
+    title, heat, kw, pos = cands[0]
+    print(f"  选定热点: {title}（{heat}万在看，候选 {len(cands)} 条）")
+    # 二次定位：重放同一个关键词，取同一序号的选项，用 force 点击绕过遮挡检测。
+    # （Semi 下拉在多轮搜索后 DOM 会重建，旧 locator 一律失效；按序号重放最稳。）
+    try:
+        inp = block.locator("input").first
+        inp.click()
+        inp.fill("")
+        time.sleep(0.4)
+        inp.fill(kw)
+        time.sleep(1.8)
+        now = _opts()
+        with open(LOGS / f"hot_pick_{idx}.txt", "w", encoding="utf-8") as f:
+            f.write(f"目标: {title}\n关键词 {kw} 重放后 {len(now)} 条:\n")
+            for i, (_, t) in enumerate(now, 1):
+                f.write(f"[{i:02d}] {_clean(t)}\n")
+        if pos < len(now):
+            el, txt = now[pos]
+            print(f"  重放命中: {_clean(txt)}")
+            el.click(force=True, timeout=5000)
+            time.sleep(1.0)
+            page.keyboard.press("Escape")
+            time.sleep(0.5)
+            print(f"  已关联热点: {title}")
+            return True
+        print(f"    [警告] 重放后序号越界（{pos} >= {len(now)}）")
+    except Exception as e:
+        print(f"    [警告] 精确点选失败: {e}")
+
+    page.keyboard.press("Escape")
+    time.sleep(0.4)
+    print("  [热点] 未能选中，本条不关联热点")
+    return False
+
+    box.click()
+    time.sleep(2.5)
+    shot(page, f"hot_open_{idx}")
+    rows = _hot_rows(page)
+
+    # 默认榜没抓到 → 用关键词搜一次（搜索框支持直接搜热点词；用最短的词命中率最高）
+    if not rows:
+        search_kw = min(keywords, key=len)
+        try:
+            box.fill(search_kw)
+            time.sleep(2.5)
+            shot(page, f"hot_search_{idx}")
+            rows = _hot_rows(page)
+        except Exception as e:
+            print(f"  [热点] 搜索「{search_kw}」失败: {e}")
+
+    dump = LOGS / f"hot_list_{idx}.txt"
+    with open(dump, "w", encoding="utf-8") as f:
+        f.write(f"抓取时间: {datetime.now():%Y-%m-%d %H:%M:%S}\n")
+        f.write(f"关键词优先级: {keywords}\n共 {len(rows)} 条\n\n")
+        for i, (_, txt) in enumerate(rows, 1):
+            f.write(f"[{i:02d}] {txt}\n")
+    print(f"  热点候选 {len(rows)} 条，清单已存 {dump.name}")
+
+    for kw in keywords:
+        for row, txt in rows:
+            if kw in txt:
+                try:
+                    row.click()
+                    time.sleep(0.8)
+                    print(f"  已关联热点: {txt[:40]}")
+                    return True
+                except Exception as e:
+                    print(f"    [警告] 命中「{kw}」但点击失败: {e}")
+                    break
+    print(f"  [热点] 没有命中 {keywords} 的条目，本条不关联热点")
+    page.keyboard.press("Escape")
     return False
 
 
@@ -575,7 +833,15 @@ def publish_one(ctx, item, idx, execute, interactive=True):
         raise RuntimeError("上传超时未就绪，看截图")
     shot(page, f"uploaded_{idx}")
 
-    # 2. 标题 + 正文 + 话题
+    # 2. 关联热点（视频传完即可操作，不等其它字段；可选，失败不阻断）
+    if item.get("hot_topic"):
+        try:
+            set_hot_topic(page, item["hot_topic"], idx)
+        except Exception as e:
+            shot(page, "err_hot_topic")
+            print(f"  [警告] 关联热点设置失败（不阻断）: {e}")
+
+    # 3. 标题 + 正文 + 话题
     title, body, tags = split_manifest_text(item["text"])
     has_title_input = fill_title(page, title)
 

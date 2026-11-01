@@ -1,13 +1,13 @@
 ---
 name: douyin-publisher
 description: "抖音成品视频批量发布：把一个系列的成片 mp4 批量上传到抖音创作者平台并逐集填标题话题/定时发布。引导 Agent 用 douyin-publisher CLI（login 扫码 / gen 生成清单 / publish 批量发布，dry-run 默认）完成发布全流程，包括：从分镜脚本提取每集标题话题填清单、首跑校准页面选择器、非交互批处理模式、失败集补跑、风控纪律与合集处理建议。触发词：发布抖音、批量上传、上传抖音、发布视频到抖音、抖音发布清单、douyin publisher、发抖音、系列视频发布"
-version: "1.5.0"
+version: "1.6.1"
 
 author: "CodeBuddy AI"
 
 created: "2026-10-16"
 
-changelog: "1.0.0 首个版本。源自 douyin-publisher 项目实战立项：调研确认抖音开放平台 OpenAPI 对个人主体不可行，故走创作者中心网页端 + Playwright 浏览器自动化路线。1.1.0（2026-10-18）对齐工具 v0.3 实战（Ep07 首跑 + Ep08-10 定时发布）：登录改持久化 Chrome 档案；封面自动化；manifest 新增 collection/aigc；--at/--now 统一定时；发布按钮精确匹配；keepalive。1.2.0（2026-10-18）Agent-first：工具并入本 skill 的 engine/ 统一管理；新增 doctor 自检、publish --json（stdout 纯 JSON + 错误码）、默认非交互（--interactive 才逐集确认）；manifest 新增 visibility/declaration/allow_save；合集与非公开可见互斥。1.3.0（2026-10-18）话题热度筛选：manifest 新增 topics（theme/pin/seeds/min_heat/count），实时查 challengesug 播放量、按 ≥1亿 选最热、点选绑定话题实体；新增 topics 子命令；总话题数上限 5。1.4.0（2026-10-18）发布记录：真发布后自动追加 Markdown + CSV（默认 <项目根>/.douyin-publisher/发布记录.md，话题带热度、失败带 error_code），新增 history 子命令与 --history/--no-history。1.4.1（2026-10-18）发布记录默认改为项目根 `.douyin-publisher/`（按清单向上找 .git/.workbuddy/AGENTS.md，不写用户主目录），新增 history --manifest 定位；新建记录目录自动 .gitignore。1.5.0（2026-10-18）话题数量默认填满：count 缺省即取满到上限 5（原默认 3），用户仍可自定义数量，硬钳 ≤5；候选不足不报错。"
+changelog: "1.0.0 首个版本。源自 douyin-publisher 项目实战立项：调研确认抖音开放平台 OpenAPI 对个人主体不可行，故走创作者中心网页端 + Playwright 浏览器自动化路线。1.1.0（2026-10-18）对齐工具 v0.3 实战（Ep07 首跑 + Ep08-10 定时发布）：登录改持久化 Chrome 档案；封面自动化；manifest 新增 collection/aigc；--at/--now 统一定时；发布按钮精确匹配；keepalive。1.2.0（2026-10-18）Agent-first：工具并入本 skill 的 engine/ 统一管理；新增 doctor 自检、publish --json（stdout 纯 JSON + 错误码）、默认非交互（--interactive 才逐集确认）；manifest 新增 visibility/declaration/allow_save；合集与非公开可见互斥。1.3.0（2026-10-18）话题热度筛选：manifest 新增 topics（theme/pin/seeds/min_heat/count），实时查 challengesug 播放量、按 ≥1亿 选最热、点选绑定话题实体；新增 topics 子命令；总话题数上限 5。1.4.0（2026-10-18）发布记录：真发布后自动追加 Markdown + CSV（默认 <项目根>/.douyin-publisher/发布记录.md，话题带热度、失败带 error_code），新增 history 子命令与 --history/--no-history。1.4.1（2026-10-18）发布记录默认改为项目根 `.douyin-publisher/`（按清单向上找 .git/.workbuddy/AGENTS.md，不写用户主目录），新增 history --manifest 定位；新建记录目录自动 .gitignore。1.5.0（2026-10-18）话题数量默认填满：count 缺省即取满到上限 5（原默认 3），用户仍可自定义数量，硬钳 ≤5；候选不足不报错。1.6.0（2026-10-24）关联热点：manifest 新增 `hot_topic`（关键词数组），引擎在「视频传完即可操作」的第一时间点选热点；支持多关键词搜索汇总、按关键词优先级+热度排序、`config.HOT_DENY` 政治/灾害/八卦黑名单、点击失败自动落盘诊断（`logs/hot_pick_*.txt` / `hot_list_*.txt`）；失败不阻断发布。"
 ---
 
 # 抖音成品视频批量发布（douyin-publisher）
@@ -49,6 +49,10 @@ douyin-publisher gen "<系列目录>" -o <系列目录>/发布清单.json
 - `topics`（可选，v0.6+，推荐）：话题热度筛选。`theme`=第 1 个（主题名，豁免热度）；`pin`=第 2 个起相关词（list，豁免热度）；`seeds` 填约 10 个当期候选词；其余按 `view_count >= min_heat`（默认 1 亿）、话题名包含 seed、每个 seed 最多 1 个，取最热的 `count` 个。**`count` 缺省即填满到 5 个**（抖音描述区上限 5），用户可自定义数量、上限 5；候选不足时按实际选到的数量出，不报错。总数上限 `1 + len(pin) + count ≤ 5`。
   - 种子怎么来：从该集分镜/调研里抽约 10 个"观众真会搜"的词（现象词、人群词、场景词），别只填宽泛大词。
   - 配了 `topics` 后，`text` 里的 `#话题` 只作兜底（接口挂掉时用）；dry-run 会打印选中话题与热度明细。
+- `hot_topic`（可选，v1.6.0）：**关联热点**。填关键词数组（按优先级），引擎会在视频传完后立刻打开热点下拉，逐个关键词搜索、汇总候选，按「关键词优先级 > 在看热度」选第一条，过黑名单后点选。命中不了就不绑（**不阻断发布**），并落盘 `logs/hot_list_<n>.txt`（每轮搜索结果）与 `logs/hot_pick_<n>.txt`（二次定位结果）。
+  - **别用单词泛词**（`日本`/`经济`/`游戏`）：实测 `日本` 会翻出涉台涉政热点，已被 `config.HOT_DENY` 拦截，但拦掉之后往往就没有候选了。要指定活动就写活动名（如 `vibe知识大赏`）。
+  - **定时发布 × 热点是弱组合**：热点小时级生鲜，定时 6~20 天后的视频绑今天的热点基本失效。要么按批次绑当时在榜的长效活动，要么接受「只是打一个领域标签」。
+  - 想让整批统一挂同一个热点：**所有集填同一份关键词**，不要逐集换。
 - `cover`（竖版 3:4，设置失败会**中止发布**）与 `cover_h`（横版 4:3，失败仅警告不阻断）：直接填每集交付的封面路径。
 - `collection`：合集名按「包含」匹配，须为**已存在**的合集（找不到会打印候选）。
 - `visibility`（公开/好友可见/仅自己可见）、`declaration`（6 种自主声明，含「无需添加自主声明」）、
@@ -110,6 +114,11 @@ douyin-publisher publish <清单> --execute --json --result-file logs/result.jso
 | 话题总数超 5 | 抖音描述区上限 5；`1 + len(pin) + count ≤ 5`，清单预检直接报错，减 count 或 pin |
 | 话题热度接口失效 | 打印"话题热度接口不可用"并回退 `text` 话题；先 dry-run 看警告，别盲目 execute |
 | 用户语音输入 | "发布清单"可能被识别成别的词，涉及发布操作一律先复述清单内容再执行 |
+| 关联热点抓不到条目 | 它是 **Semi 可搜索下拉**（`div.semi-select-filterable`，占位「点击输入热点词」），不是 `input`；label 与控件在栅格两列，`ancestor::div[2]` 圈不到，须用 `ancestor::div[contains(@class,'content-obt4oA')]` 圈区块再取 `.semi-select`。**字段只在视频上传完成后才渲染**，空上传页探不到 |
+| 热点二次定位点不动 | 多轮搜索之间下拉 DOM 会重建，**旧 locator 全失效**（表现为 click 超时 15s）。引擎已改成「记录关键词+序号 → 重放关键词 → `click(force=True)`」，并落盘 `hot_pick_<n>.txt` |
+| 热点标题带热度数字 | 选项文本是「标题 + N万在看」，直接当标题用会匹配不上；引擎用 `_clean()` 剥掉尾部数字 |
+| 榜单默认 54 条全是体育/娱乐/灾害 | 默认榜按「在看」排序，与内容无关。**不要把它并入候选池**（实测会把 1031 万的 Kimi 顶掉目标活动），只作日志留档 |
+| **脚本像卡死一样停住不动** | 定位到**话题点选**时看这条。2026-10-24 计时实测：同一个话题名，第一个下拉的 `inner_text()` **阻塞 25.8s 并判定未命中**，后面几个只要 0.8s（默认超时 30s，节点在下拉重建时失效被无限重试），结果既「卡住」又掉绑定率（4/5）。**修法（v1.6.2）**：改用 `page.evaluate` 直接读 DOM 文本定位（`_topic_items`，<50ms），再按序号 `ArrowDown×k + Space` 确认；全程不 click、不 `inner_text` 元素。每个话题打一行 `[话题计时]`，超过 5s 就是异常。排查手法：`PYTHONUNBUFFERED=1 ... > run.log 2>&1` 后台跑再 tail，**别用管道接 grep**（管道缓冲会吞掉全部过程输出） |
 
 ## 形态（2026-10-18 定稿：engine + skill 单轨）
 
