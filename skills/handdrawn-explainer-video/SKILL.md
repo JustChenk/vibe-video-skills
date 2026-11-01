@@ -3,13 +3,13 @@ name: handdrawn-explainer-video
   
 description: "把任意主题制作成 3 分钟以内的手绘卡通风格科普教学短片（JS + Canvas 逐帧渲染成 1080p MP4，无配音）。当用户要求'做个教学视频/科普短片/手绘动画视频/讲解视频'，或给出一个主题、文章链接希望生成讲解视频时使用。关键词：教学视频、科普视频、手绘动画、科普短片、Canvas 动画、讲解视频"
   
-version: "1.6.0"
+version: "1.6.1"
   
 author: "CodeBuddy AI"
   
 created: "2026-10-10"
   
-changelog: "1.6.0 关键帧视觉审查门禁（源自《AI 逆向一切》两次返工的教训）：新增 scripts/keyframes.js（按幕+字幕自动选点出帧、联系表、空白/越界/压条/非确定性机械体检、逐张看过后 --approve 签收、签收绑定工程指纹）与 scripts/_review.js / _browser.js；render.js 全量渲染前强制校验签收（无签收/工程改过/帧被删一律拒绝，仅 --allow-unreviewed 显式跳过），新增 --clean、--review-dir，自检帧明确不当作审查证据；precheck.js 新增局部坐标误用（translate 块里画 circled/banner/chapterTitle）、字幕表时间轴与语速、渲染确定性三类检查；新增 Windows 可用的 scripts/encode.js（编码前验帧连续性+mtime、编码后校验帧数/yuv420p/音轨）与 scripts/grab.js（精确抽帧、--acts 每幕抽帧）；阶段 4 重写为「静态自检 → 关键帧审查签收」，阶段 5 加前置条件与双版本纪律；技术备忘 8 补双向坐标坑、新增 9~14（审查门禁成因、测试帧不可当证据、双版本同源同批、编码前验帧、Windows 别凑 bash、中文源码勿用管道批量替换）；产物目录新增 keyframes/。 1.5.0 迁入 vibe-video-skills 合集仓库（位于 skills/handdrawn-explainer-video/）：安装说明改为「clone 合集 + 链接 skill 目录」两种方式，补充同仓库另两个 skill（series-video-planner / douyin-cover-generator）的串联关系；本 skill 制作流程无功能变更。 1.4.0 新增 scripts/precheck.js 渲染前静态自检（用函数真实签名校验所有调用点，专治参数错位/漏参/时间基准错误，--dump 可打印参数绑定）；阶段 4 强制先跑 precheck；阶段 3 增加『API 签名速查表』与签名纪律；技术备忘新增第 7 条（参数错位类 bug 的成因与防护）。 1.3.1 阶段 3 字体引入支持 junction 零复制共享（Windows 推荐）或 copy 自包含二选一；技术备忘补充 rationale 与实测结论。 1.3.0 阶段 0 新增 research/ 原始调研留痕（每条来源一个 md：URL+摘要+原文摘录），调研材料数据点附引用链接，形成 成片→调研材料→原始来源 三层溯源链。 1.2.0 恢复『安装』章节(通用表述)、README 作品演示与参考文献；纳入 Git API 推送脚本与经验手册。 1.1.0 所有产物统一收纳到 <项目根>/<主题文件夹>/；路径去掉 /workspace 等 Linux 假设"  
+changelog: "1.6.1 产物目录约定新增主题文件夹命名规则：宿主项目若用 `独立主题/` 收纳单主题视频，目录名强制 `YYYYMMDD_<主题名>`（日期=立项当天），根目录系列目录仍为纯 `主题名/`；起因是 2026-11-01 用户要求给独立主题加日期前缀，`ls` 即可按时间排序。 1.6.0 关键帧视觉审查门禁（源自《AI 逆向一切》两次返工的教训）：新增 scripts/keyframes.js（按幕+字幕自动选点出帧、联系表、空白/越界/压条/非确定性机械体检、逐张看过后 --approve 签收、签收绑定工程指纹）与 scripts/_review.js / _browser.js；render.js 全量渲染前强制校验签收（无签收/工程改过/帧被删一律拒绝，仅 --allow-unreviewed 显式跳过），新增 --clean、--review-dir，自检帧明确不当作审查证据；precheck.js 新增局部坐标误用（translate 块里画 circled/banner/chapterTitle）、字幕表时间轴与语速、渲染确定性三类检查；新增 Windows 可用的 scripts/encode.js（编码前验帧连续性+mtime、编码后校验帧数/yuv420p/音轨）与 scripts/grab.js（精确抽帧、--acts 每幕抽帧）；阶段 4 重写为「静态自检 → 关键帧审查签收」，阶段 5 加前置条件与双版本纪律；技术备忘 8 补双向坐标坑、新增 9~14（审查门禁成因、测试帧不可当证据、双版本同源同批、编码前验帧、Windows 别凑 bash、中文源码勿用管道批量替换）；产物目录新增 keyframes/。 1.5.0 迁入 vibe-video-skills 合集仓库（位于 skills/handdrawn-explainer-video/）：安装说明改为「clone 合集 + 链接 skill 目录」两种方式，补充同仓库另两个 skill（series-video-planner / douyin-cover-generator）的串联关系；本 skill 制作流程无功能变更。 1.4.0 新增 scripts/precheck.js 渲染前静态自检（用函数真实签名校验所有调用点，专治参数错位/漏参/时间基准错误，--dump 可打印参数绑定）；阶段 4 强制先跑 precheck；阶段 3 增加『API 签名速查表』与签名纪律；技术备忘新增第 7 条（参数错位类 bug 的成因与防护）。 1.3.1 阶段 3 字体引入支持 junction 零复制共享（Windows 推荐）或 copy 自包含二选一；技术备忘补充 rationale 与实测结论。 1.3.0 阶段 0 新增 research/ 原始调研留痕（每条来源一个 md：URL+摘要+原文摘录），调研材料数据点附引用链接，形成 成片→调研材料→原始来源 三层溯源链。 1.2.0 恢复『安装』章节(通用表述)、README 作品演示与参考文献；纳入 Git API 推送脚本与经验手册。 1.1.0 所有产物统一收纳到 <项目根>/<主题文件夹>/；路径去掉 /workspace 等 Linux 假设"  
 ---
 
 # 手绘卡通教学视频生成器
@@ -85,6 +85,7 @@ cd ~/.codebuddy/skills/vibe-video-skills && git sparse-checkout set skills/handd
 ```
 
 - **开工第一步就创建该文件夹**，此后调研材料、research/、分镜、工程、帧、成片全部写在其内，禁止散落到项目根目录、tmp/ 或其他位置
+- **命名带日期前缀**：若宿主项目用 `独立主题/` 这类目录收纳单主题视频，主题文件夹名必须是 **`YYYYMMDD_<主题名>`**（日期=立项当天，8 位数字 + 下划线，如 `20261101_SuperAgent设计探索`）。根目录下的系列/合集目录保持纯 `主题名/`，不加日期（系列靠 EpXX 排序）。日期前缀的作用是让目录天然按时间排序、归档清理不必回翻日志
 - 下文所有命令中的 `<主题文件夹>` 均指此目录；`<项目根>` 为当前工作目录
 - frames/ 、testframes/ 、keyframes/ 是中间产物，交付确认后提醒用户可删（一部 170s 视频的 frames 约 1-2 GB）。
   注意：**删掉 keyframes/ 等于作废旧签收**，以后想重渲必须先重新出帧审查（这是刻意的设计，别图省事删它）。
